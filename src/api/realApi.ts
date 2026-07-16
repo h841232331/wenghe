@@ -167,11 +167,13 @@ export const realApi = {
     date: string;
     qtInfo: { name: string; price: number; preClose: number; changePercent: number; high: number; low: number } | null;
     points: { time: string; price: number; volume: number; amount: number; changePercent: number }[];
+    depth: { buy: { price: number; volume: number }[]; sell: { price: number; volume: number }[] } | null;
   }> {
     return request<{
       date: string;
       qtInfo: any;
       points: any[];
+      depth: any;
     }>(`/stock/intraday/${code}`);
   },
 };

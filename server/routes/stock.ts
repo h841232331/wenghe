@@ -150,7 +150,7 @@ router.get('/overview/:code', async (req, res, next) => {
   }
 });
 
-// 获取日内分时图数据
+// 获取日内分时图数据（含5档盘口）
 router.get('/intraday/:code', async (req, res, next) => {
   try {
     const code = req.params.code;
@@ -198,7 +198,40 @@ router.get('/intraday/:code', async (req, res, next) => {
       low: Number(qt[34]) || 0,
     } : null;
 
-    res.json({ success: true, data: { date, qtInfo, points } });
+    // 获取5档盘口数据（从qt.gtimg.cn）
+    let depth: any = null;
+    try {
+      const tencentCode = `${prefix}${code}`;
+      const depthResp = await fetch(`https://qt.gtimg.cn/q=${tencentCode}`);
+      const depthBuffer = await depthResp.arrayBuffer();
+      const depthText = new TextDecoder('gbk').decode(depthBuffer);
+      const depthMatch = depthText.match(/v_(\w+)="(.+)"/);
+      if (depthMatch) {
+        const fields = depthMatch[2].split('~');
+        if (fields.length >= 29) {
+          depth = {
+            buy: [
+              { price: Number(fields[9]) || 0, volume: Number(fields[10]) || 0 },
+              { price: Number(fields[11]) || 0, volume: Number(fields[12]) || 0 },
+              { price: Number(fields[13]) || 0, volume: Number(fields[14]) || 0 },
+              { price: Number(fields[15]) || 0, volume: Number(fields[16]) || 0 },
+              { price: Number(fields[17]) || 0, volume: Number(fields[18]) || 0 },
+            ],
+            sell: [
+              { price: Number(fields[19]) || 0, volume: Number(fields[20]) || 0 },
+              { price: Number(fields[21]) || 0, volume: Number(fields[22]) || 0 },
+              { price: Number(fields[23]) || 0, volume: Number(fields[24]) || 0 },
+              { price: Number(fields[25]) || 0, volume: Number(fields[26]) || 0 },
+              { price: Number(fields[27]) || 0, volume: Number(fields[28]) || 0 },
+            ],
+          };
+        }
+      }
+    } catch (e) {
+      console.warn(`[Intraday] Depth fetch failed for ${code}:`, e);
+    }
+
+    res.json({ success: true, data: { date, qtInfo, points, depth } });
   } catch (error) {
     next(error);
   }

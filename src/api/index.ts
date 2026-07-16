@@ -560,10 +560,11 @@ export async function fetchIntraday(code: string): Promise<{
   date: string;
   qtInfo: { name: string; price: number; preClose: number; changePercent: number; high: number; low: number } | null;
   points: { time: string; price: number; volume: number; amount: number; changePercent: number }[];
+  depth: { buy: { price: number; volume: number }[]; sell: { price: number; volume: number }[] } | null;
 }> {
   if (!apiConfig.useMockData && !apiConfig.backendDown) {
     return realApi.fetchIntraday(code);
   }
   await delay(200);
-  return { date: '', qtInfo: null, points: [] };
+  return { date: '', qtInfo: null, points: [], depth: null };
 }

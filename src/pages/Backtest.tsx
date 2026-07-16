@@ -110,7 +110,7 @@ const Backtest: React.FC = () => {
   // 图表模式: kline | intraday
   const [chartMode, setChartMode] = useState<'kline' | 'intraday'>('kline');
   const [intradayData, setIntradayData] = useState<{
-    date: string; qtInfo: any; points: any[];
+    date: string; qtInfo: any; points: any[]; depth: any;
   } | null>(null);
   const [intradayLoading, setIntradayLoading] = useState(false);
 
@@ -299,8 +299,8 @@ const Backtest: React.FC = () => {
       backgroundColor: '#1a1a2e',
       animation: false,
       grid: [
-        { left: '10%', right: '4%', top: '5%', height: '60%' },
-        { left: '10%', right: '4%', top: '72%', height: '16%' },
+        { left: '10%', right: '8%', top: '5%', height: '60%' },
+        { left: '10%', right: '8%', top: '72%', height: '16%' },
       ],
       xAxis: [
         {
@@ -342,13 +342,19 @@ const Backtest: React.FC = () => {
         borderColor: '#444',
         textStyle: { color: '#ccc', fontSize: 12 },
         formatter: (params: any) => {
-          if (!params || params.length < 2) return '';
-          const t = params[0].axisValue;
-          const price = params[0].value;
+          if (!params || params.length === 0) return '';
+          const priceParam = params.find((p: any) => p.seriesName === '价格') || params[0];
+          const t = priceParam.axisValue;
+          const price = priceParam.value;
           const chg = preClose > 0 ? ((price - preClose) / preClose * 100) : 0;
-          return `<div style="font-size:13px;font-weight:bold;margin-bottom:4px">${t}</div>
-            <div>价格: <span style="color:${color}">${price?.toFixed(2)}</span></div>
-            <div>涨跌幅: <span style="color:${color}">${chg?.toFixed(2)}%</span></div>`;
+          const volParam = params.find((p: any) => p.seriesName === '成交量');
+          let s = `<div style="font-size:13px;font-weight:bold;margin-bottom:4px">${t}</div>`;
+          s += `<div>价格: <span style="color:${color}">${price?.toFixed(2)}</span></div>`;
+          s += `<div>涨跌幅: <span style="color:${color}">${chg >= 0 ? '+' : ''}${chg?.toFixed(2)}%</span></div>`;
+          if (volParam) {
+            s += `<div>成交量: ${(volParam.value / 100).toFixed(0)}手</div>`;
+          }
+          return s;
         },
       },
       series: [
@@ -514,7 +520,33 @@ const Backtest: React.FC = () => {
                       ) : intradayLoading ? (
                         <div className="flex items-center justify-center h-[220px] text-sm text-slate-400">加载分时图...</div>
                       ) : intradayData?.points?.length ? (
-                        <ReactECharts key="intraday" option={getIntradayOption()} style={{ height: '280px' }} />
+                        <>
+                          <ReactECharts key="intraday" option={getIntradayOption()} style={{ height: '280px' }} />
+                          {intradayData?.depth && (
+                            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                              <div className="border border-slate-200 rounded overflow-hidden">
+                                <div className="bg-green-50 text-green-700 font-medium px-2 py-1 text-center border-b border-green-200">买盘</div>
+                                {intradayData.depth.buy?.map((item: any, i: number) => (
+                                  <div key={i} className="flex justify-between px-2 py-0.5 border-b border-slate-100 last:border-b-0">
+                                    <span className="text-slate-500">买{i + 1}</span>
+                                    <span className="text-green-600 font-medium">{item.price > 0 ? item.price.toFixed(2) : '-'}</span>
+                                    <span className="text-slate-400">{item.volume > 0 ? (item.volume / 100).toFixed(0) : '-'}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="border border-slate-200 rounded overflow-hidden">
+                                <div className="bg-red-50 text-red-700 font-medium px-2 py-1 text-center border-b border-red-200">卖盘</div>
+                                {[...(intradayData.depth.sell || [])].reverse().map((item: any, i: number) => (
+                                  <div key={i} className="flex justify-between px-2 py-0.5 border-b border-slate-100 last:border-b-0">
+                                    <span className="text-slate-500">卖{5 - i}</span>
+                                    <span className="text-red-600 font-medium">{item.price > 0 ? item.price.toFixed(2) : '-'}</span>
+                                    <span className="text-slate-400">{item.volume > 0 ? (item.volume / 100).toFixed(0) : '-'}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
                       ) : (
                         <div className="flex items-center justify-center h-[220px] text-sm text-slate-400">暂无分时数据（非交易时段）</div>
                       )}
