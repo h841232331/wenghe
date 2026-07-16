@@ -107,7 +107,8 @@ router.get('/overview/:code', async (req, res, next) => {
             amount: Number(fields[37]) || 0,
             turnover: Number(fields[38]) || 0,
             pe: Number(fields[39]) || 0,
-            marketCap: Number(fields[45]) || 0,
+            pb: Number(fields[46]) || 0,
+            marketCap: Number(fields[44]) || 0,  // 总市值(亿)
           };
         }
       }
@@ -140,6 +141,60 @@ router.get('/overview/:code', async (req, res, next) => {
     }
 
     res.json({ success: true, data: { quote, kline } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 获取日内分时图数据
+router.get('/intraday/:code', async (req, res, next) => {
+  try {
+    const code = req.params.code;
+    const prefix = code.startsWith('6') || code.startsWith('9') ? 'sh' : 'sz';
+    const url = `https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=${prefix}${code}`;
+    
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    
+    const json: any = await resp.json();
+    const stockData = json?.data?.[`${prefix}${code}`];
+    if (!stockData) {
+      return res.json({ success: false, message: '未找到分时数据' });
+    }
+
+    const qt = stockData.qt?.[`${prefix}${code}`] || [];
+    const minuteData = stockData.data?.data || [];
+    const date = stockData.data?.date || '';
+    const preClose = Number(qt[4]) || 0;
+
+    // 解析分钟数据: "HHMM price volume amount"
+    const points = minuteData.map((row: string) => {
+      const parts = row.split(' ');
+      const time = parts[0] || '';
+      const price = Number(parts[1]) || 0;
+      const volume = Number(parts[2]) || 0;
+      const amount = Number(parts[3]) || 0;
+      return {
+        time: `${time.slice(0, 2)}:${time.slice(2, 4)}`,
+        price,
+        volume,
+        amount,
+        changePercent: preClose > 0 ? ((price - preClose) / preClose * 100) : 0,
+      };
+    });
+
+    const qtInfo = qt.length >= 35 ? {
+      name: qt[1] || '',
+      price: Number(qt[3]) || 0,
+      preClose: Number(qt[4]) || 0,
+      changePercent: Number(qt[32]) || 0,
+      high: Number(qt[33]) || 0,
+      low: Number(qt[34]) || 0,
+    } : null;
+
+    res.json({ success: true, data: { date, qtInfo, points } });
   } catch (error) {
     next(error);
   }

@@ -154,12 +154,24 @@ export const realApi = {
   },
 
   async fetchStockOverview(code: string): Promise<{
-    quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; marketCap: number } | null;
+    quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; pb: number; marketCap: number } | null;
     kline: { date: string; open: number; close: number; high: number; low: number; volume: number }[];
   }> {
     return request<{
       quote: any;
       kline: any[];
     }>(`/stock/overview/${code}`);
+  },
+
+  async fetchIntraday(code: string): Promise<{
+    date: string;
+    qtInfo: { name: string; price: number; preClose: number; changePercent: number; high: number; low: number } | null;
+    points: { time: string; price: number; volume: number; amount: number; changePercent: number }[];
+  }> {
+    return request<{
+      date: string;
+      qtInfo: any;
+      points: any[];
+    }>(`/stock/intraday/${code}`);
   },
 };

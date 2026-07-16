@@ -60,6 +60,7 @@ interface MarketCache {
     code: string; name: string; price: number; change: number; changePercent: number;
     volume: number; amount: number; turnover: number;
     high: number; low: number; open: number; preClose: number;
+    marketCap: number; pe: number; pb: number;
   }>;
 }
 
@@ -156,6 +157,9 @@ async function refreshMarketCache(): Promise<MarketCache> {
             low: Number(fields[34]) || 0,
             open: Number(fields[5]) || 0,
             preClose: Number(fields[4]) || 0,
+            marketCap: Number(fields[44]) || 0,    // 总市值(亿)
+            pe: Number(fields[39]) || 0,            // PE(TTM)
+            pb: Number(fields[46]) || 0,            // 市净率
           };
         }
       } catch (e) {
@@ -456,13 +460,21 @@ export const realDataSource: DataSource = {
           s.code.includes(k) || s.name.includes(k) || s.industry.includes(k)
         ).slice(0, 20);
         if (cached.length > 0) {
-          return cached.map(s => ({
-            code: s.code,
-            name: s.name,
-            industry: s.industry,
-            market: (s.code.startsWith('6') || s.code.startsWith('9') ? 'SH' : 'SZ') as 'SH' | 'SZ',
-            marketCap: 0, pe: 0, pb: 0, roe: 0,
-          }));
+          // 从行情缓存获取实时市值/PE/PB
+          const mc = await getMarketCache();
+          return cached.map(s => {
+            const q = mc.quotes[s.code];
+            return {
+              code: s.code,
+              name: s.name,
+              industry: s.industry,
+              market: (s.code.startsWith('6') || s.code.startsWith('9') ? 'SH' : 'SZ') as 'SH' | 'SZ',
+              marketCap: q?.marketCap || 0,
+              pe: q?.pe || 0,
+              pb: q?.pb || 0,
+              roe: 0,
+            };
+          });
         }
       }
 

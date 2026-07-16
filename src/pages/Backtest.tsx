@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { LineChart, Play, TrendingUp, TrendingDown, Target, Calendar, DollarSign, Info, BarChart3 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Stock, Strategy } from '@/types';
-import { searchStocks, fetchStockOverview } from '@/api';
+import { searchStocks, fetchStockOverview, fetchIntraday } from '@/api';
 
 const PerformanceCard: React.FC<{
   title: string;
@@ -94,6 +94,7 @@ const Backtest: React.FC = () => {
   useEffect(() => {
     if (selectedStock) {
       setOverviewLoading(true);
+      setChartMode('kline');
       fetchStockOverview(selectedStock.code)
         .then(data => setStockOverview(data))
         .catch(() => setStockOverview(null))
@@ -102,6 +103,57 @@ const Backtest: React.FC = () => {
       setStockOverview(null);
     }
   }, [selectedStock]);
+
+  // 图表模式: kline | intraday
+  const [chartMode, setChartMode] = useState<'kline' | 'intraday'>('kline');
+  const [intradayData, setIntradayData] = useState<{
+    date: string; qtInfo: any; points: any[];
+  } | null>(null);
+  const [intradayLoading, setIntradayLoading] = useState(false);
+
+  useEffect(() => {
+    if (chartMode === 'intraday' && selectedStock) {
+      setIntradayLoading(true);
+      fetchIntraday(selectedStock.code)
+        .then(data => setIntradayData(data))
+        .catch(() => setIntradayData(null))
+        .finally(() => setIntradayLoading(false));
+    }
+  }, [chartMode, selectedStock]);
+
+  // 分时图配置
+  const getIntradayOption = () => {
+    const points = intradayData?.points || [];
+    if (points.length === 0) return {};
+    const preClose = intradayData?.qtInfo?.preClose || 0;
+    const times = points.map((p: any) => p.time);
+    const prices = points.map((p: any) => p.price);
+    const volumes = points.map((p: any) => p.volume);
+    const changes = points.map((p: any) => p.changePercent);
+    const color = (intradayData?.qtInfo?.changePercent || 0) >= 0 ? '#ef4444' : '#22c55e';
+    const priceMin = Math.min(...prices);
+    const priceMax = Math.max(...prices);
+    const pricePad = (priceMax - priceMin) * 0.3 || 1;
+
+    return {
+      grid: [
+        { left: '8%', right: '3%', top: '5%', height: '70%' },
+        { left: '8%', right: '3%', top: '80%', height: '15%' },
+      ],
+      xAxis: [
+        { type: 'category', data: times, gridIndex: 0, show: false },
+        { type: 'category', data: times, gridIndex: 1, show: false },
+      ],
+      yAxis: [
+        { type: 'value', gridIndex: 0, min: priceMin - pricePad, max: priceMax + pricePad, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { fontSize: 10, color: '#94a3b8' } },
+        { type: 'value', gridIndex: 1, show: false },
+      ],
+      series: [
+        { name: '价格', type: 'line', data: prices, smooth: true, xAxisIndex: 0, yAxisIndex: 0, lineStyle: { width: 1.5, color }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: color + '30' }, { offset: 1, color: color + '05' }] } }, symbol: 'none', markLine: { silent: true, data: [{ yAxis: preClose, lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 } }] } },
+        { name: '成交量', type: 'bar', data: volumes, xAxisIndex: 1, yAxisIndex: 1, itemStyle: { color: color + '40' } },
+      ],
+    };
+  };
 
   // K线迷你图配置
   const getMiniKlineOption = () => {
@@ -216,16 +268,34 @@ const Backtest: React.FC = () => {
                       <div className="text-center"><div className="text-xs text-slate-500">最低</div><div className="text-sm font-medium text-green-600">¥{stockOverview.quote.low.toFixed(2)}</div></div>
                       <div className="text-center"><div className="text-xs text-slate-500">昨收</div><div className="text-sm font-medium">¥{stockOverview.quote.preClose.toFixed(2)}</div></div>
                     </div>
-                    <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-amber-100">
+                    <div className="grid grid-cols-4 gap-2 mt-2 pt-2 border-t border-amber-100">
                       <div className="text-center"><div className="text-xs text-slate-500">PE(TTM)</div><div className="text-sm font-medium">{stockOverview.quote.pe > 0 ? stockOverview.quote.pe.toFixed(1) : '-'}</div></div>
-                      <div className="text-center"><div className="text-xs text-slate-500">市值</div><div className="text-sm font-medium">{stockOverview.quote.marketCap > 0 ? (stockOverview.quote.marketCap / 1e8).toFixed(0) + '亿' : '-'}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">PB</div><div className="text-sm font-medium">{stockOverview.quote.pb > 0 ? stockOverview.quote.pb.toFixed(1) : '-'}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">市值</div><div className="text-sm font-medium">{stockOverview.quote.marketCap > 0 ? stockOverview.quote.marketCap.toFixed(0) + '亿' : '-'}</div></div>
                       <div className="text-center"><div className="text-xs text-slate-500">换手率</div><div className="text-sm font-medium">{stockOverview.quote.turnover.toFixed(2)}%</div></div>
                     </div>
                   </div>
                   {stockOverview.kline.length > 0 && (
                     <div>
-                      <div className="flex items-center gap-1 text-xs text-slate-500 mb-1"><BarChart3 className="w-3 h-3" />近60日K线</div>
-                      <ReactECharts option={getMiniKlineOption()} style={{ height: '180px' }} />
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1 text-xs text-slate-500">
+                          <BarChart3 className="w-3 h-3" />
+                          {chartMode === 'kline' ? '近60日K线' : `分时图 ${intradayData?.date || ''}`}
+                        </div>
+                        <div className="flex rounded border border-slate-200 overflow-hidden">
+                          <button onClick={() => setChartMode('kline')} className={`px-2 py-0.5 text-xs ${chartMode === 'kline' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>K线</button>
+                          <button onClick={() => setChartMode('intraday')} className={`px-2 py-0.5 text-xs ${chartMode === 'intraday' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>分时</button>
+                        </div>
+                      </div>
+                      {chartMode === 'kline' ? (
+                        <ReactECharts option={getMiniKlineOption()} style={{ height: '180px' }} />
+                      ) : intradayLoading ? (
+                        <div className="flex items-center justify-center h-[180px] text-sm text-slate-400">加载分时图...</div>
+                      ) : intradayData?.points?.length ? (
+                        <ReactECharts option={getIntradayOption()} style={{ height: '220px' }} />
+                      ) : (
+                        <div className="flex items-center justify-center h-[180px] text-sm text-slate-400">暂无分时数据（非交易时段）</div>
+                      )}
                     </div>
                   )}
                 </>

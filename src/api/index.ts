@@ -543,7 +543,7 @@ export { setUseMockData, apiConfig };
  * 获取股票概览（行情+K线）
  */
 export async function fetchStockOverview(code: string): Promise<{
-  quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; marketCap: number } | null;
+  quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; pb: number; marketCap: number } | null;
   kline: { date: string; open: number; close: number; high: number; low: number; volume: number }[];
 }> {
   if (!apiConfig.useMockData && !apiConfig.backendDown) {
@@ -551,4 +551,19 @@ export async function fetchStockOverview(code: string): Promise<{
   }
   await delay(200);
   return { quote: null, kline: [] };
+}
+
+/**
+ * 获取日内分时图数据
+ */
+export async function fetchIntraday(code: string): Promise<{
+  date: string;
+  qtInfo: { name: string; price: number; preClose: number; changePercent: number; high: number; low: number } | null;
+  points: { time: string; price: number; volume: number; amount: number; changePercent: number }[];
+}> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.fetchIntraday(code);
+  }
+  await delay(200);
+  return { date: '', qtInfo: null, points: [] };
 }
