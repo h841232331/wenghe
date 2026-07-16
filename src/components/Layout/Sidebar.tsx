@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { path: '/', label: '数据概览', icon: LayoutDashboard },
+  { path: '/dashboard', label: '数据概览', icon: LayoutDashboard },
   { path: '/stock-selection', label: '选股中心', icon: Target },
   { path: '/backtest', label: '回测分析', icon: LineChart },
   { path: '/strategy', label: '策略管理', icon: Settings },
@@ -15,7 +15,7 @@ const navItems = [
 
 const Sidebar = () => {
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-[#1a237e] flex flex-col text-white">
+    <aside className="fixed left-0 top-0 h-screen w-[240px] bg-[#1a237e] flex flex-col text-white">
       {/* 品牌区域 */}
       <div className="p-6 border-b border-white/10">
         <div className="flex items-center gap-3">

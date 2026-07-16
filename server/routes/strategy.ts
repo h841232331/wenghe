@@ -1,8 +1,15 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const router = Router();
 
-const strategies = [
+// 预设策略（不可删除）
+const presetStrategies = [
   {
     id: 'strategy-001',
     name: '价值投资策略',
@@ -118,16 +125,133 @@ const strategies = [
   },
 ];
 
-router.get('/', async (req, res) => {
-  res.json({ success: true, data: strategies });
+// 用户策略存储文件
+const USER_STRATEGIES_FILE = path.join(__dirname, '..', 'data', 'user-strategies.json');
+
+// 读取用户策略
+function loadUserStrategies(): any[] {
+  try {
+    if (fs.existsSync(USER_STRATEGIES_FILE)) {
+      const raw = fs.readFileSync(USER_STRATEGIES_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('[Strategy] Failed to load user strategies:', e);
+  }
+  return [];
+}
+
+// 保存用户策略
+function saveUserStrategies(strategies: any[]): void {
+  try {
+    const dir = path.dirname(USER_STRATEGIES_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(USER_STRATEGIES_FILE, JSON.stringify(strategies, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[Strategy] Failed to save user strategies:', e);
+  }
+}
+
+// 获取所有策略（预设 + 用户自建）
+router.get('/', async (req: Request, res: Response) => {
+  const userStrategies = loadUserStrategies();
+  const all = [...presetStrategies, ...userStrategies];
+  res.json({ success: true, data: all });
 });
 
-router.get('/:id', async (req, res) => {
-  const strategy = strategies.find(s => s.id === req.params.id);
-  if (!strategy) {
-    return res.status(404).json({ success: false, message: '策略不存在' });
+// 获取单个策略
+router.get('/:id', async (req: Request, res: Response) => {
+  const preset = presetStrategies.find(s => s.id === req.params.id);
+  if (preset) return res.json({ success: true, data: preset });
+
+  const userStrategies = loadUserStrategies();
+  const user = userStrategies.find(s => s.id === req.params.id);
+  if (user) return res.json({ success: true, data: user });
+
+  res.status(404).json({ success: false, message: '策略不存在' });
+});
+
+// 创建用户策略
+router.post('/', async (req: Request, res: Response) => {
+  try {
+    const { name, type, description, factors, filters, isPublic } = req.body;
+    if (!name || !type) {
+      return res.status(400).json({ success: false, message: '策略名称和类型不能为空' });
+    }
+
+    const newStrategy = {
+      id: `user-${Date.now()}`,
+      name,
+      type,
+      description: description || '',
+      factors: factors || [],
+      filters: filters || [],
+      isPublic: isPublic || false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const userStrategies = loadUserStrategies();
+    userStrategies.push(newStrategy);
+    saveUserStrategies(userStrategies);
+
+    res.json({ success: true, data: newStrategy });
+  } catch (e) {
+    res.status(500).json({ success: false, message: '创建策略失败' });
   }
-  res.json({ success: true, data: strategy });
+});
+
+// 更新用户策略
+router.put('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const preset = presetStrategies.find(s => s.id === id);
+    if (preset) {
+      return res.status(400).json({ success: false, message: '预设策略不可修改' });
+    }
+
+    const userStrategies = loadUserStrategies();
+    const index = userStrategies.findIndex(s => s.id === id);
+    if (index === -1) {
+      return res.status(404).json({ success: false, message: '策略不存在' });
+    }
+
+    userStrategies[index] = {
+      ...userStrategies[index],
+      ...req.body,
+      id, // 保持ID不变
+      updatedAt: new Date().toISOString(),
+    };
+    saveUserStrategies(userStrategies);
+
+    res.json({ success: true, data: userStrategies[index] });
+  } catch (e) {
+    res.status(500).json({ success: false, message: '更新策略失败' });
+  }
+});
+
+// 删除用户策略
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const preset = presetStrategies.find(s => s.id === id);
+    if (preset) {
+      return res.status(400).json({ success: false, message: '预设策略不可删除' });
+    }
+
+    const userStrategies = loadUserStrategies();
+    const filtered = userStrategies.filter(s => s.id !== id);
+    if (filtered.length === userStrategies.length) {
+      return res.status(404).json({ success: false, message: '策略不存在' });
+    }
+
+    saveUserStrategies(filtered);
+    res.json({ success: true, message: '删除成功' });
+  } catch (e) {
+    res.status(500).json({ success: false, message: '删除策略失败' });
+  }
 });
 
 export const strategyRoutes = router;

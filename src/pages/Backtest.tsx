@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { LineChart, Play, TrendingUp, TrendingDown, Target, Calendar, DollarSign } from 'lucide-react';
+import { LineChart, Play, TrendingUp, TrendingDown, Target, Calendar, DollarSign, Info, BarChart3 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Stock, Strategy } from '@/types';
+import { searchStocks, fetchStockOverview } from '@/api';
 
-// 绩效指标卡片组件
 const PerformanceCard: React.FC<{
   title: string;
   value: string | number;
@@ -15,9 +15,7 @@ const PerformanceCard: React.FC<{
 }> = ({ title, value, subtitle, icon, color, trend }) => (
   <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow">
     <div className="flex items-center justify-between mb-3">
-      <div className={`p-2 rounded-lg ${color}`}>
-        {icon}
-      </div>
+      <div className={`p-2 rounded-lg ${color}`}>{icon}</div>
       {trend && (
         <span className={`flex items-center gap-1 text-xs font-medium ${
           trend === 'up' ? 'text-green-600' : trend === 'down' ? 'text-red-600' : 'text-slate-600'
@@ -33,47 +31,43 @@ const PerformanceCard: React.FC<{
   </div>
 );
 
-// 股票搜索器组件
-const StockSearcher: React.FC<{
-  onSelect: (stock: Stock) => void;
-}> = ({ onSelect }) => {
-  const { stocks } = useAppStore();
+const StockSearcher: React.FC<{ onSelect: (stock: Stock) => void }> = ({ onSelect }) => {
+  const { stocks: storeStocks } = useAppStore();
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState<Stock[]>([]);
+  const [searching, setSearching] = useState(false);
 
-  const filteredStocks = stocks.filter(stock => 
-    stock.code.includes(searchTerm) || 
-    stock.name.includes(searchTerm) ||
-    stock.industry.includes(searchTerm)
-  ).slice(0, 10);
+  const doSearch = useCallback(async (term: string) => {
+    if (!term.trim()) { setSearchResults(storeStocks.slice(0, 10)); return; }
+    setSearching(true);
+    try {
+      const results = await searchStocks(term);
+      let final = results.slice(0, 10);
+      if (final.length === 0) {
+        final = storeStocks.filter(s => s.code.includes(term) || s.name.includes(term)).slice(0, 10);
+      }
+      if (final.length === 0 && /^\d{6}$/.test(term.trim())) {
+        final = [{ code: term.trim(), name: term.trim(), industry: '未分类', market: term.trim().startsWith('6') ? 'SH' : 'SZ', marketCap: 0, pe: 0, pb: 0, roe: 0 }];
+      }
+      setSearchResults(final);
+    } catch {
+      setSearchResults(storeStocks.filter(s => s.code.includes(term) || s.name.includes(term)).slice(0, 10));
+    } finally { setSearching(false); }
+  }, [storeStocks]);
+
+  useEffect(() => { const t = setTimeout(() => doSearch(searchTerm), 300); return () => clearTimeout(t); }, [searchTerm, doSearch]);
 
   return (
     <div className="relative">
-      <input
-        type="text"
-        placeholder="搜索股票代码或名称..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all"
-      />
-      {searchTerm && filteredStocks.length > 0 && (
-        <div className="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg border border-slate-200 max-h-64 overflow-y-auto">
-          {filteredStocks.map(stock => (
-            <div
-              key={stock.code}
-              onClick={() => {
-                onSelect(stock);
-                setSearchTerm('');
-              }}
-              className="px-4 py-3 hover:bg-slate-50 cursor-pointer flex items-center justify-between"
-            >
-              <div>
-                <div className="font-medium text-slate-900">{stock.name}</div>
-                <div className="text-xs text-slate-500">{stock.code} · {stock.industry}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-sm font-medium text-slate-900">¥{stock.marketCap}亿</div>
-                <div className="text-xs text-slate-500">市值</div>
-              </div>
+      <input type="text" placeholder="搜索股票代码或名称..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none" />
+      {searchTerm && (
+        <div className="absolute z-10 w-full mt-1 bg-white rounded-lg shadow-lg border max-h-64 overflow-y-auto">
+          {searching && <div className="px-4 py-3 text-sm text-slate-500 text-center">搜索中...</div>}
+          {!searching && searchResults.length === 0 && <div className="px-4 py-3 text-sm text-slate-500 text-center">未找到匹配股票</div>}
+          {!searching && searchResults.map(s => (
+            <div key={s.code} onClick={() => { onSelect(s); setSearchTerm(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer flex justify-between">
+              <div><div className="font-medium">{s.name}</div><div className="text-xs text-slate-500">{s.code} · {s.industry}</div></div>
+              <div className="text-right"><div className="text-sm font-medium">¥{s.marketCap}亿</div><div className="text-xs text-slate-500">市值</div></div>
             </div>
           ))}
         </div>
@@ -83,157 +77,103 @@ const StockSearcher: React.FC<{
 };
 
 const Backtest: React.FC = () => {
-  const { 
-    stocks, 
-    strategies, 
-    selectedStock, 
-    selectedStrategy, 
-    currentBacktestResult, 
-    loading,
-    setSelectedStock,
-    setSelectedStrategy,
-    runBacktestAction
-  } = useAppStore();
-
-  const [dateRange, setDateRange] = useState({
-    startDate: '2024-01-01',
-    endDate: '2024-05-23'
-  });
+  const { stocks, strategies, myStrategies, selectedStock, selectedStrategy, currentBacktestResult, loading, setSelectedStock, setSelectedStrategy, runBacktestAction, fetchInitialData } = useAppStore();
+  const allStrategies = [...strategies, ...myStrategies.filter(ms => !strategies.find(s => s.id === ms.id))];
+  const [dateRange, setDateRange] = useState({ startDate: '2024-01-01', endDate: '2024-05-23' });
   const [initialCapital, setInitialCapital] = useState(100000);
 
-  // 收益曲线图表
-  const getPerformanceChartOption = () => {
-    if (!currentBacktestResult || currentBacktestResult.dailyReturns.length === 0) {
-      return {};
+  // 确保策略和股票数据已加载
+  useEffect(() => { fetchInitialData(); }, []);
+
+  // 股票概览数据
+  const [stockOverview, setStockOverview] = useState<{
+    quote: any; kline: any[];
+  } | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+
+  useEffect(() => {
+    if (selectedStock) {
+      setOverviewLoading(true);
+      fetchStockOverview(selectedStock.code)
+        .then(data => setStockOverview(data))
+        .catch(() => setStockOverview(null))
+        .finally(() => setOverviewLoading(false));
+    } else {
+      setStockOverview(null);
     }
+  }, [selectedStock]);
 
-    const dates = currentBacktestResult.dailyReturns.map(d => d.date);
-    const values = currentBacktestResult.dailyReturns.map(d => d.value);
-    const benchmarks = currentBacktestResult.dailyReturns.map(d => 
-      100000 * (1 + d.benchmark / 100)
-    );
-
+  // K线迷你图配置
+  const getMiniKlineOption = () => {
+    const kline = stockOverview?.kline || [];
+    if (kline.length === 0) return {};
+    const dates = kline.map((k: any) => k.date);
+    const values = kline.map((k: any) => [k.open, k.close, k.low, k.high]);
+    const ma5: (number | null)[] = [];
+    for (let i = 0; i < kline.length; i++) {
+      if (i < 4) { ma5.push(null); continue; }
+      let sum = 0;
+      for (let j = i - 4; j <= i; j++) sum += kline[j].close;
+      ma5.push(+(sum / 5).toFixed(2));
+    }
     return {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross' }
-      },
-      legend: {
-        data: ['策略收益', '基准收益'],
-        bottom: 0
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '15%',
-        top: '10%',
-        containLabel: true
-      },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-        axisLabel: { 
-          color: '#64748b',
-          rotate: 45,
-          interval: 6
-        }
-      },
-      yAxis: {
-        type: 'value',
-        name: '资产价值',
-        axisLabel: { color: '#64748b', formatter: '{value}' },
-        splitLine: { lineStyle: { color: '#f1f5f9' } }
-      },
+      grid: { left: '8%', right: '3%', top: '5%', bottom: '5%' },
+      xAxis: { type: 'category', data: dates, show: false },
+      yAxis: { type: 'value', show: true, splitLine: { lineStyle: { color: '#f1f5f9' } }, scale: true, axisLabel: { fontSize: 10, color: '#94a3b8' } },
       series: [
-        {
-          name: '策略收益',
-          type: 'line',
-          data: values,
-          smooth: true,
-          lineStyle: { width: 3, color: '#ffc107' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(255, 193, 7, 0.3)' },
-                { offset: 1, color: 'rgba(255, 193, 7, 0.05)' }
-              ]
-            }
-          },
-          itemStyle: { color: '#ffc107' }
-        },
-        {
-          name: '基准收益',
-          type: 'line',
-          data: benchmarks,
-          smooth: true,
-          lineStyle: { width: 2, color: '#94a3b8', type: 'dashed' },
-          itemStyle: { color: '#94a3b8' }
-        }
+        { name: 'K线', type: 'candlestick', data: values, itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' } },
+        { name: 'MA5', type: 'line', data: ma5, smooth: true, lineStyle: { width: 1, color: '#f59e0b' }, symbol: 'none' }
       ]
     };
   };
 
-  // 回撤图表
-  const getDrawdownChartOption = () => {
-    if (!currentBacktestResult) return {};
-
+  const getPerformanceChartOption = () => {
+    if (!currentBacktestResult || currentBacktestResult.dailyReturns.length === 0) {
+      return { title: { text: '暂无收益数据', left: 'center', top: 'center', textStyle: { color: '#94a3b8', fontSize: 14 } }, xAxis: { show: false }, yAxis: { show: false }, series: [] };
+    }
     const dates = currentBacktestResult.dailyReturns.map(d => d.date);
-    // 模拟回撤数据
-    const drawdowns = currentBacktestResult.dailyReturns.map(() => 
-      Math.random() * -15
-    );
+    const returnPcts = currentBacktestResult.dailyReturns.map(d => d.returnPct);
+    const benchPcts = currentBacktestResult.dailyReturns.map(d => d.benchmark);
+    const values = currentBacktestResult.dailyReturns.map(d => d.value);
 
     return {
       tooltip: {
         trigger: 'axis',
-        formatter: '{b}<br/>回撤: {c}%'
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        top: '10%',
-        containLabel: true
-      },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        boundaryGap: false,
-        axisLabel: { 
-          color: '#64748b',
-          rotate: 45,
-          interval: 6
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          const idx = params[0].dataIndex;
+          let s = `<div style="font-weight:bold;margin-bottom:6px">${params[0].axisValue}</div>`;
+          params.forEach((p: any) => {
+            if (p.seriesName === '策略收益') s += `<div>${p.marker} 策略: <b>${p.value.toFixed(2)}%</b> (¥${values[idx].toFixed(0)})</div>`;
+            else s += `<div>${p.marker} 基准: <b>${p.value.toFixed(2)}%</b></div>`;
+          });
+          return s;
         }
       },
-      yAxis: {
-        type: 'value',
-        name: '回撤(%)',
-        axisLabel: { color: '#64748b', formatter: '{value}%' },
-        splitLine: { lineStyle: { color: '#f1f5f9' } }
-      },
+      legend: { data: ['策略收益', '基准收益'], bottom: 0 },
+      grid: { left: '3%', right: '4%', bottom: '15%', top: '10%', containLabel: true },
+      xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: '#64748b', rotate: 45, interval: Math.max(1, Math.floor(dates.length / 8)) } },
+      yAxis: { type: 'value', name: '收益率(%)', axisLabel: { color: '#64748b', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#f1f5f9' } }, splitNumber: 5 },
       series: [
-        {
-          name: '回撤',
-          type: 'line',
-          data: drawdowns,
-          smooth: true,
-          lineStyle: { width: 2, color: '#ef4444' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(239, 68, 68, 0.3)' },
-                { offset: 1, color: 'rgba(239, 68, 68, 0.05)' }
-              ]
-            }
-          },
-          itemStyle: { color: '#ef4444' }
-        }
+        { name: '策略收益', type: 'line', data: returnPcts, smooth: true, lineStyle: { width: 3, color: '#ffc107' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(255,193,7,0.3)' }, { offset: 1, color: 'rgba(255,193,7,0.05)' }] } }, itemStyle: { color: '#ffc107' }, markLine: { silent: true, data: [{ yAxis: 0, label: { formatter: '成本基线' }, lineStyle: { color: '#64748b', type: 'dashed' } }] } },
+        { name: '基准收益', type: 'line', data: benchPcts, smooth: true, lineStyle: { width: 2, color: '#94a3b8', type: 'dashed' }, itemStyle: { color: '#94a3b8' } }
       ]
+    };
+  };
+
+  const getDrawdownChartOption = () => {
+    const drawdowns = currentBacktestResult?.drawdowns || [];
+    if (drawdowns.length === 0) {
+      return { title: { text: '暂无回撤数据', left: 'center', top: 'center', textStyle: { color: '#94a3b8', fontSize: 14 } }, xAxis: { show: false }, yAxis: { show: false }, series: [] };
+    }
+    const dates = drawdowns.map(d => d.date);
+    const values = drawdowns.map(d => -d.value);
+    return {
+      tooltip: { trigger: 'axis', formatter: (p: any) => p?.[0] ? `${p[0].axisValue}<br/>回撤: <b>${(-p[0].value).toFixed(2)}%</b>` : '' },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+      xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { color: '#64748b', rotate: 45, interval: Math.max(1, Math.floor(dates.length / 8)) } },
+      yAxis: { type: 'value', name: '回撤(%)', axisLabel: { color: '#64748b', formatter: '{value}%' }, splitLine: { lineStyle: { color: '#f1f5f9' } }, splitNumber: 5 },
+      series: [{ name: '回撤', type: 'line', data: values, smooth: true, lineStyle: { width: 2, color: '#ef4444' }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: 'rgba(239,68,68,0.3)' }, { offset: 1, color: 'rgba(239,68,68,0.05)' }] } }, itemStyle: { color: '#ef4444' } }]
     };
   };
 
@@ -245,245 +185,167 @@ const Backtest: React.FC = () => {
 
   return (
     <div className="p-6 space-y-6">
-      {/* 页面标题 */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-800 mb-2">回测分析</h1>
-        <p className="text-slate-600">验证策略有效性，评估风险收益</p>
-      </div>
+      <div className="mb-6"><h1 className="text-2xl font-bold text-slate-800 mb-2">回测分析</h1><p className="text-slate-600">验证策略有效性，评估风险收益</p></div>
 
-      {/* 配置区域 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 股票选择 */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <h3 className="text-lg font-semibold text-slate-800 mb-4">选择股票</h3>
           <StockSearcher onSelect={setSelectedStock} />
           {selectedStock && (
-            <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
-              <div className="font-medium text-amber-900">{selectedStock.name}</div>
-              <div className="text-sm text-amber-700">{selectedStock.code} · {selectedStock.industry}</div>
+            <div className="mt-4 space-y-3">
+              {overviewLoading ? (
+                <div className="flex items-center justify-center py-4 text-sm text-slate-400">加载中...</div>
+              ) : stockOverview?.quote ? (
+                <>
+                  <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-lg text-amber-900">{stockOverview.quote.name}</div>
+                        <div className="text-sm text-amber-700">{selectedStock.code} · {selectedStock.industry}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-bold text-slate-800">¥{stockOverview.quote.price.toFixed(2)}</div>
+                        <div className={`text-sm font-medium ${stockOverview.quote.changePercent >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {stockOverview.quote.changePercent >= 0 ? '+' : ''}{stockOverview.quote.changePercent.toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 mt-3 pt-3 border-t border-amber-200">
+                      <div className="text-center"><div className="text-xs text-slate-500">今开</div><div className="text-sm font-medium">¥{stockOverview.quote.open.toFixed(2)}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">最高</div><div className="text-sm font-medium text-red-600">¥{stockOverview.quote.high.toFixed(2)}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">最低</div><div className="text-sm font-medium text-green-600">¥{stockOverview.quote.low.toFixed(2)}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">昨收</div><div className="text-sm font-medium">¥{stockOverview.quote.preClose.toFixed(2)}</div></div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-amber-100">
+                      <div className="text-center"><div className="text-xs text-slate-500">PE(TTM)</div><div className="text-sm font-medium">{stockOverview.quote.pe > 0 ? stockOverview.quote.pe.toFixed(1) : '-'}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">市值</div><div className="text-sm font-medium">{stockOverview.quote.marketCap > 0 ? (stockOverview.quote.marketCap / 1e8).toFixed(0) + '亿' : '-'}</div></div>
+                      <div className="text-center"><div className="text-xs text-slate-500">换手率</div><div className="text-sm font-medium">{stockOverview.quote.turnover.toFixed(2)}%</div></div>
+                    </div>
+                  </div>
+                  {stockOverview.kline.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-1 text-xs text-slate-500 mb-1"><BarChart3 className="w-3 h-3" />近60日K线</div>
+                      <ReactECharts option={getMiniKlineOption()} style={{ height: '180px' }} />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                  <div className="font-medium text-amber-900">{selectedStock.name}</div>
+                  <div className="text-sm text-amber-700">{selectedStock.code} · {selectedStock.industry}</div>
+                </div>
+              )}
             </div>
           )}
         </div>
-
-        {/* 策略选择 */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <h3 className="text-lg font-semibold text-slate-800 mb-4">选择策略</h3>
-          <select
-            value={selectedStrategy?.id || ''}
-            onChange={(e) => {
-              const strategy = strategies.find(s => s.id === e.target.value);
-              setSelectedStrategy(strategy || null);
-            }}
-            className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all"
-          >
+          <select value={selectedStrategy?.id || ''} onChange={e => setSelectedStrategy(allStrategies.find(s => s.id === e.target.value) || null)} className="w-full px-4 py-3 rounded-lg border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none">
             <option value="">请选择策略</option>
-            {strategies.map(strategy => (
-              <option key={strategy.id} value={strategy.id}>
-                {strategy.name}
-              </option>
-            ))}
+            {allStrategies.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
-          {selectedStrategy && (
-            <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200">
-              <div className="font-medium text-purple-900">{selectedStrategy.name}</div>
-              <div className="text-sm text-purple-700 mt-1">{selectedStrategy.description}</div>
-            </div>
-          )}
+          {selectedStrategy && <div className="mt-4 p-4 bg-purple-50 rounded-lg border border-purple-200"><div className="font-medium text-purple-900">{selectedStrategy.name}</div><div className="text-sm text-purple-700 mt-1">{selectedStrategy.description}</div></div>}
         </div>
-
-        {/* 参数配置 */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
           <h3 className="text-lg font-semibold text-slate-800 mb-4">回测参数</h3>
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                <Calendar className="w-4 h-4 inline mr-1" />
-                开始日期
-              </label>
-              <input
-                type="date"
-                value={dateRange.startDate}
-                onChange={(e) => setDateRange({ ...dateRange, startDate: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                <Calendar className="w-4 h-4 inline mr-1" />
-                结束日期
-              </label>
-              <input
-                type="date"
-                value={dateRange.endDate}
-                onChange={(e) => setDateRange({ ...dateRange, endDate: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">
-                <DollarSign className="w-4 h-4 inline mr-1" />
-                初始资金
-              </label>
-              <input
-                type="number"
-                value={initialCapital}
-                onChange={(e) => setInitialCapital(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none"
-              />
-            </div>
+            <div><label className="block text-sm font-medium text-slate-700 mb-2"><Calendar className="w-4 h-4 inline mr-1" />开始日期</label><input type="date" value={dateRange.startDate} onChange={e => setDateRange({ ...dateRange, startDate: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none" /></div>
+            <div><label className="block text-sm font-medium text-slate-700 mb-2"><Calendar className="w-4 h-4 inline mr-1" />结束日期</label><input type="date" value={dateRange.endDate} onChange={e => setDateRange({ ...dateRange, endDate: e.target.value })} className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none" /></div>
+            <div><label className="block text-sm font-medium text-slate-700 mb-2"><DollarSign className="w-4 h-4 inline mr-1" />初始资金</label><input type="number" value={initialCapital} onChange={e => setInitialCapital(Number(e.target.value))} className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 outline-none" /></div>
           </div>
         </div>
       </div>
 
-      {/* 执行按钮 */}
       <div className="flex justify-center">
-        <button
-          onClick={handleRunBacktest}
-          disabled={!selectedStock || !selectedStrategy || loading}
-          className={`flex items-center gap-2 px-8 py-4 rounded-lg font-medium text-lg transition-all ${
-            selectedStock && selectedStrategy && !loading
-              ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-lg hover:scale-105'
-              : 'bg-slate-300 text-slate-500 cursor-not-allowed'
-          }`}
-        >
-          {loading ? (
-            <>
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              回测中...
-            </>
-          ) : (
-            <>
-              <Play className="w-5 h-5" />
-              执行回测
-            </>
-          )}
+        <button onClick={handleRunBacktest} disabled={!selectedStock || !selectedStrategy || loading} className={`flex items-center gap-2 px-8 py-4 rounded-lg font-medium text-lg transition-all ${selectedStock && selectedStrategy && !loading ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-lg hover:scale-105' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}>
+          {loading ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />回测中...</> : <><Play className="w-5 h-5" />执行回测</>}
         </button>
       </div>
 
-      {/* 回测结果 */}
-      {currentBacktestResult && (
-        <>
-          {/* 绩效指标 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-            <PerformanceCard
-              title="总收益率"
-              value={`${currentBacktestResult.performance.totalReturn.toFixed(2)}%`}
-              icon={<TrendingUp className="w-5 h-5 text-white" />}
-              color="bg-green-500"
-              trend={currentBacktestResult.performance.totalReturn >= 0 ? 'up' : 'down'}
-            />
-            <PerformanceCard
-              title="年化收益"
-              value={`${currentBacktestResult.performance.annualReturn.toFixed(2)}%`}
-              icon={<TrendingUp className="w-5 h-5 text-white" />}
-              color="bg-blue-500"
-              trend={currentBacktestResult.performance.annualReturn >= 0 ? 'up' : 'down'}
-            />
-            <PerformanceCard
-              title="最大回撤"
-              value={`${currentBacktestResult.performance.maxDrawdown.toFixed(2)}%`}
-              icon={<TrendingDown className="w-5 h-5 text-white" />}
-              color="bg-red-500"
-              trend="down"
-            />
-            <PerformanceCard
-              title="夏普比率"
-              value={currentBacktestResult.performance.sharpeRatio.toFixed(2)}
-              icon={<LineChart className="w-5 h-5 text-white" />}
-              color="bg-purple-500"
-            />
-            <PerformanceCard
-              title="胜率"
-              value={`${currentBacktestResult.performance.winRate.toFixed(1)}%`}
-              icon={<Target className="w-5 h-5 text-white" />}
-              color="bg-amber-500"
-            />
-            <PerformanceCard
-              title="盈亏比"
-              value={currentBacktestResult.performance.profitLossRatio.toFixed(2)}
-              icon={<DollarSign className="w-5 h-5 text-white" />}
-              color="bg-teal-500"
-            />
-            <PerformanceCard
-              title="Alpha"
-              value={`${currentBacktestResult.performance.alpha.toFixed(2)}%`}
-              icon={<TrendingUp className="w-5 h-5 text-white" />}
-              color="bg-indigo-500"
-            />
-            <PerformanceCard
-              title="Beta"
-              value={currentBacktestResult.performance.beta.toFixed(2)}
-              icon={<LineChart className="w-5 h-5 text-white" />}
-              color="bg-gray-500"
-            />
-          </div>
+      {currentBacktestResult && (<>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
+          <PerformanceCard title="总收益率" value={`${currentBacktestResult.performance.totalReturn.toFixed(2)}%`} icon={<TrendingUp className="w-5 h-5 text-white" />} color="bg-green-500" trend={currentBacktestResult.performance.totalReturn >= 0 ? 'up' : 'down'} />
+          <PerformanceCard title="年化收益" value={`${currentBacktestResult.performance.annualReturn.toFixed(2)}%`} icon={<TrendingUp className="w-5 h-5 text-white" />} color="bg-blue-500" trend={currentBacktestResult.performance.annualReturn >= 0 ? 'up' : 'down'} />
+          <PerformanceCard title="最大回撤" value={`${currentBacktestResult.performance.maxDrawdown.toFixed(2)}%`} icon={<TrendingDown className="w-5 h-5 text-white" />} color="bg-red-500" trend="down" />
+          <PerformanceCard title="夏普比率" value={currentBacktestResult.performance.sharpeRatio.toFixed(2)} icon={<LineChart className="w-5 h-5 text-white" />} color="bg-purple-500" />
+          <PerformanceCard title="胜率" value={`${currentBacktestResult.performance.winRate.toFixed(1)}%`} subtitle={`${currentBacktestResult.performance.winCount || 0}赢 / ${currentBacktestResult.performance.lossCount || 0}亏`} icon={<Target className="w-5 h-5 text-white" />} color="bg-amber-500" />
+          <PerformanceCard title="盈亏比" value={currentBacktestResult.performance.profitLossRatio.toFixed(2)} icon={<DollarSign className="w-5 h-5 text-white" />} color="bg-teal-500" />
+          <PerformanceCard title="Alpha" value={`${currentBacktestResult.performance.alpha.toFixed(2)}%`} icon={<TrendingUp className="w-5 h-5 text-white" />} color="bg-indigo-500" />
+          <PerformanceCard title="Beta" value={currentBacktestResult.performance.beta.toFixed(2)} icon={<LineChart className="w-5 h-5 text-white" />} color="bg-gray-500" />
+        </div>
 
-          {/* 收益曲线 */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
-              <LineChart className="w-5 h-5 text-amber-500" />
-              收益曲线
-            </h3>
-            <ReactECharts option={getPerformanceChartOption()} style={{ height: '400px' }} />
-          </div>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2"><LineChart className="w-5 h-5 text-amber-500" />收益曲线（以初始资金为成本基线）</h3>
+          <ReactECharts option={getPerformanceChartOption()} style={{ height: '400px' }} />
+        </div>
 
-          {/* 回撤曲线 */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
-              <TrendingDown className="w-5 h-5 text-red-500" />
-              回撤曲线
-            </h3>
-            <ReactECharts option={getDrawdownChartOption()} style={{ height: '300px' }} />
-          </div>
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-red-500" />回撤曲线</h3>
+          <ReactECharts option={getDrawdownChartOption()} style={{ height: '300px' }} />
+        </div>
 
-          {/* 交易记录 */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-800">交易记录</h3>
+        {/* 核验明细 */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2"><Info className="w-5 h-5 text-blue-500" />计算核验明细</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="space-y-2">
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">回测区间</span><span className="font-medium">{currentBacktestResult.startDate} ~ {currentBacktestResult.endDate}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">交易日数</span><span className="font-medium">{currentBacktestResult.dailyReturns.length} 天</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">初始资金</span><span className="font-medium">¥{currentBacktestResult.initialCapital?.toLocaleString() || '100,000'}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">最终资产</span><span className="font-medium">¥{currentBacktestResult.dailyReturns.length > 0 ? currentBacktestResult.dailyReturns[currentBacktestResult.dailyReturns.length - 1].value.toFixed(2) : '-'}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">绝对收益</span><span className={`font-medium ${currentBacktestResult.performance.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>¥{currentBacktestResult.dailyReturns.length > 0 ? (currentBacktestResult.dailyReturns[currentBacktestResult.dailyReturns.length - 1].value - (currentBacktestResult.initialCapital || 100000)).toFixed(2) : '-'}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">总收益率</span><span className={`font-medium ${currentBacktestResult.performance.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>{currentBacktestResult.performance.totalReturn.toFixed(2)}%</span></div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">日期</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">类型</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">价格</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">股数</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">金额</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">原因</th>
+            <div className="space-y-2">
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">年化收益率</span><span className="font-medium">{currentBacktestResult.performance.annualReturn.toFixed(2)}%</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">最大回撤</span><span className="font-medium text-red-600">{currentBacktestResult.performance.maxDrawdown.toFixed(2)}%</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">夏普比率</span><span className="font-medium">{currentBacktestResult.performance.sharpeRatio.toFixed(2)}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">总交易次数</span><span className="font-medium">{currentBacktestResult.performance.totalTrades || 0}</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">胜率</span><span className="font-medium">{currentBacktestResult.performance.winRate.toFixed(1)}%</span></div>
+              <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-slate-500">盈亏比</span><span className="font-medium">{currentBacktestResult.performance.profitLossRatio.toFixed(2)}</span></div>
+            </div>
+          </div>
+          <div className="mt-4 p-3 bg-blue-50 rounded-lg text-xs text-blue-700">
+            <b>核验公式：</b>总收益率 = (最终资产 - 初始资金) / 初始资金 × 100%；年化收益率 = (最终资产/初始资金)^(1/年数) - 1；胜率 = 盈利交易数 / 总交易数；盈亏比 = 平均盈利 / 平均亏损
+          </div>
+        </div>
+
+        {/* 交易记录 - 独立滚动 */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+          <div className="px-6 py-4 border-b border-slate-200 rounded-t-xl flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-slate-800">交易记录</h3>
+            <span className="text-xs text-slate-400">共 {currentBacktestResult.trades.length} 条</span>
+          </div>
+          <div className="overflow-y-auto rounded-b-xl trade-scroll" style={{ maxHeight: '500px' }}>
+            <table className="w-full">
+              <thead className="bg-slate-50 sticky top-0 z-10">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">日期</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">类型</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">价格</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">股数</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">金额</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">原因</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {currentBacktestResult.trades.length === 0 ? (
+                  <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400">暂无交易记录</td></tr>
+                ) : currentBacktestResult.trades.map((trade, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{trade.date}</td>
+                    <td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 py-1 rounded text-xs font-medium ${trade.type === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{trade.type === 'buy' ? '买入' : '卖出'}</span></td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">¥{trade.price.toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm">{trade.shares}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">¥{trade.amount.toFixed(0)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">{trade.reason}</td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {currentBacktestResult.trades.slice(0, 10).map((trade, index) => (
-                    <tr key={index} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{trade.date}</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
-                          trade.type === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                        }`}>
-                          {trade.type === 'buy' ? '买入' : '卖出'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900">
-                        ¥{trade.price.toFixed(2)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm text-slate-600">
-                        {trade.shares}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium text-slate-900">
-                        ¥{trade.amount.toFixed(0)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-600">
-                        {trade.reason}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </>
-      )}
+        </div>
+      </>)}
     </div>
   );
 };

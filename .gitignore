@@ -34,3 +34,6 @@ npm-debug.log*
 # Temporary files
 tmp/
 temp/
+
+# Runtime data / cache
+server/data/

@@ -285,7 +285,7 @@ export async function runBacktest(
       dailyReturns.push({
         date: start.toISOString().split('T')[0],
         value: Math.round(value),
-        return: Math.round(dailyReturn * 10000) / 100,
+        returnPct: Math.round(dailyReturn * 10000) / 100,
         benchmark: Math.round(benchmark * 10000) / 100,
       });
     }
@@ -341,7 +341,7 @@ export async function runBacktest(
   const days = dailyReturns.length;
   const annualReturn = totalReturn / (days / 252);
   
-  const returns = dailyReturns.map(d => d.return / 100);
+  const returns = dailyReturns.map(d => d.returnPct / 100);
   const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
   const variance = returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length;
   const stdDev = Math.sqrt(variance);
@@ -367,6 +367,9 @@ export async function runBacktest(
   const winRate = sellTrades > 0 ? (winTrades / sellTrades) * 100 : 50;
 
   const performance: BacktestPerformance = {
+    totalTrades: 0,
+    winCount: 0,
+    lossCount: 0,
     totalReturn: Math.round(totalReturn * 100) / 100,
     annualReturn: Math.round(annualReturn * 100) / 100,
     maxDrawdown: Math.round(maxDrawdown * 100) / 100,
@@ -386,6 +389,8 @@ export async function runBacktest(
     performance,
     trades: trades.sort((a, b) => a.date.localeCompare(b.date)),
     dailyReturns,
+    initialCapital: 100000,
+    drawdowns: [],
   };
 }
 
@@ -403,14 +408,37 @@ export async function fetchStrategies(): Promise<Strategy[]> {
 }
 
 /**
- * 保存策略
+ * 保存/创建策略（服务端存储）
  */
 export async function saveStrategy(strategy: Strategy): Promise<Strategy> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.createStrategy(strategy);
+  }
   await delay(300);
   return {
     ...strategy,
-    updatedAt: new Date().toISOString(),
+    
   };
+}
+
+/**
+ * 更新策略（服务端存储）
+ */
+export async function updateStrategy(id: string, data: Partial<Strategy>): Promise<Strategy> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.updateStrategy(id, data);
+  }
+  await delay(300);
+}
+
+/**
+ * 删除策略（服务端存储）
+ */
+export async function deleteStrategy(id: string): Promise<void> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.deleteStrategy(id);
+  }
+  await delay(300);
 }
 
 // ==================== 通用配置接口 ====================
@@ -458,10 +486,10 @@ export const getFilterFields = () => [
   { key: 'ma10', label: '10日均线', unit: '元', type: 'number', category: '技术' },
   { key: 'ma20', label: '20日均线', unit: '元', type: 'number', category: '技术' },
   { key: 'ma60', label: '60日均线', unit: '元', type: 'number', category: '技术' },
-  { key: 'rsi', label: 'RSI(14)', unit: '', type: 'number', category: '技术' },
+  { key: 'rsi', label: 'RSI(14)', unit: '(0-100)', type: 'number', category: '技术' },
   { key: 'macd', label: 'MACD', unit: '', type: 'number', category: '技术' },
-  { key: 'kdj_k', label: 'KDJ-K值', unit: '', type: 'number', category: '技术' },
-  { key: 'kdj_d', label: 'KDJ-D值', unit: '', type: 'number', category: '技术' },
+  { key: 'kdj_k', label: 'KDJ-K值', unit: '(0-100)', type: 'number', category: '技术' },
+  { key: 'kdj_d', label: 'KDJ-D值', unit: '(0-100)', type: 'number', category: '技术' },
   { key: 'boll_upper', label: '布林带上轨', unit: '元', type: 'number', category: '技术' },
   { key: 'boll_lower', label: '布林带下轨', unit: '元', type: 'number', category: '技术' },
 ];
@@ -510,3 +538,17 @@ export const getFactorLibrary = () => [
 ];
 
 export { setUseMockData, apiConfig };
+
+/**
+ * 获取股票概览（行情+K线）
+ */
+export async function fetchStockOverview(code: string): Promise<{
+  quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; marketCap: number } | null;
+  kline: { date: string; open: number; close: number; high: number; low: number; volume: number }[];
+}> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.fetchStockOverview(code);
+  }
+  await delay(200);
+  return { quote: null, kline: [] };
+}

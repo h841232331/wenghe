@@ -53,7 +53,10 @@ export const realApi = {
   },
 
   async searchStocks(keyword: string): Promise<Stock[]> {
-    return request<Stock[]>(`/stock/search?keyword=${encodeURIComponent(keyword)}`);
+    return request<Stock[]>('/stock/search', {
+      method: 'POST',
+      body: JSON.stringify({ keyword }),
+    });
   },
 
   async fetchMarketOverview(): Promise<MarketOverview> {
@@ -102,6 +105,26 @@ export const realApi = {
     return request<Strategy[]>('/strategy');
   },
 
+  async createStrategy(data: Partial<Strategy>): Promise<Strategy> {
+    return request<Strategy>('/strategy', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async updateStrategy(id: string, data: Partial<Strategy>): Promise<Strategy> {
+    return request<Strategy>(`/strategy/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async deleteStrategy(id: string): Promise<void> {
+    return request<void>(`/strategy/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   async fetchStrategyById(id: string): Promise<Strategy> {
     return request<Strategy>(`/strategy/${id}`);
   },
@@ -128,5 +151,15 @@ export const realApi = {
 
   async fetchIndustries(): Promise<string[]> {
     return request<string[]>('/stock/industries');
+  },
+
+  async fetchStockOverview(code: string): Promise<{
+    quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; marketCap: number } | null;
+    kline: { date: string; open: number; close: number; high: number; low: number; volume: number }[];
+  }> {
+    return request<{
+      quote: any;
+      kline: any[];
+    }>(`/stock/overview/${code}`);
   },
 };

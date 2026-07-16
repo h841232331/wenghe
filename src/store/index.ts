@@ -191,12 +191,13 @@ export const useAppStore = create<AppState>()(
         if (get().dataReady) return; // 已加载过则跳过
         set({ loading: true });
         try {
-          const [overview, gainers, losers, volume, strategies] = await Promise.all([
+          const [overview, gainers, losers, volume, strategies, stocks] = await Promise.all([
             fetchMarketOverview().catch(() => null),
             fetchTopGainers(10).catch(() => []),
             fetchTopLosers(10).catch(() => []),
             fetchTopVolume(10).catch(() => []),
             fetchStrategies().catch(() => []),
+            searchStocks('').catch(() => []),
           ]);
           set({
             marketOverview: overview,
@@ -204,6 +205,7 @@ export const useAppStore = create<AppState>()(
             topLosers: losers,
             topVolume: volume,
             strategies,
+            stocks,
             loading: false,
             dataReady: true,
           });

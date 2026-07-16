@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, Eye, Share2, Copy, Save, X, Info, HelpCircle } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Strategy as StrategyType, StrategyFactor, StrategyFilter } from '@/types';
-import { getFactorLibrary, getFilterFields } from '@/api';
+import { getFactorLibrary, getFilterFields, saveStrategy, updateStrategy, deleteStrategy } from '@/api';
 
 const typeColors = {
   factor: 'bg-blue-100 text-blue-700',
@@ -206,7 +206,7 @@ const StrategyEditor: React.FC<{
   onCancel: () => void;
 }> = ({ strategy, onSave, onCancel }) => {
   const [name, setName] = useState(strategy?.name || '');
-  const [type, setType] = useState<StrategyType['type']>(strategy?.type || 'factor');
+  const [type, setType] = useState<StrategyType['type']>(strategy?.type || 'preset');
   const [description, setDescription] = useState(strategy?.description || '');
   const [isPublic, setIsPublic] = useState(strategy?.isPublic || false);
   const [factors, setFactors] = useState<StrategyFactor[]>(strategy?.factors || []);
@@ -234,7 +234,7 @@ const StrategyEditor: React.FC<{
   };
 
   const addFactorFromLibrary = (factor: { name: string; weight: number }) => {
-    setFactors([...factors, { name: factor.name, weight: factor.weight, params: {} }]);
+    setFactors([...factors, { id: factor.name, field: factor.name, label: factor.name, name: factor.name, weight: factor.weight, direction: "asc" as const, params: {} }]);
   };
 
   const updateFactor = (index: number, key: keyof StrategyFactor, value: any) => {
@@ -248,7 +248,29 @@ const StrategyEditor: React.FC<{
   };
 
   const addFilter = () => {
-    setFilters([...filters, { field: 'pe', operator: 'lt', value: 20 }]);
+    setFilters([...filters, { field: 'pe', label: '市盈率', operator: '小于', value: '20', value2: '', unit: '', id: String(Date.now()) }]);
+  };
+
+  const getDefaultValue = (field: string): number => {
+    const defaults: Record<string, number> = {
+      pe: 20, pb: 3, roe: 15, marketCap: 500,
+      price: 50, changePercent: 3, turnover: 5,
+      volume: 100000, amount: 10000, amplitude: 5, volumeRatio: 1.5,
+      ps: 5, peg: 1, roa: 10, grossMargin: 30, netMargin: 15,
+      debtRatio: 50, cashFlowRatio: 0.5,
+      revenueGrowth: 20, profitGrowth: 20, roeGrowth: 15, grossMarginGrowth: 10,
+      ma5: 50, ma10: 50, ma20: 50, ma60: 50,
+      rsi: 50, macd: 0, kdj_k: 50, kdj_d: 50,
+      boll_upper: 100, boll_lower: 50,
+      ev_ebitda: 15, circulatingMarketCap: 200,
+    };
+    return defaults[field] || 0;
+  };
+
+  const handleFieldChange = (index: number, field: string) => {
+    const newFilters = [...filters];
+    newFilters[index] = { ...newFilters[index], field, value: String(getDefaultValue(field)) };
+    setFilters(newFilters);
   };
 
   const removeFilter = (index: number) => {
@@ -264,7 +286,7 @@ const StrategyEditor: React.FC<{
   const updateFilterValue = (index: number, position: 'min' | 'max' | 'single', value: number) => {
     const filter = filters[index];
     if (filter.operator === 'between') {
-      const currentValue = filter.value as [number, number];
+      const currentValue = filter.value as unknown as [number, number];
       const newValue: [number, number] = position === 'min'
         ? [value, currentValue[1]]
         : position === 'max'
@@ -398,7 +420,7 @@ const StrategyEditor: React.FC<{
               ))}
               <div className="flex gap-2">
                 <button
-                  onClick={() => setFactors([...factors, { name: '', weight: 0.1, params: {} }])}
+                  onClick={() => setFactors([...factors, { id: String(Date.now()), field: '', label: '', name: '', weight: 0.1, direction: 'asc' as const, params: {} }])}
                   className="flex-1 py-2.5 text-sm text-amber-600 hover:bg-amber-50 rounded-xl border border-amber-200 border-dashed transition-colors"
                 >
                   + 手动添加因子
@@ -427,7 +449,7 @@ const StrategyEditor: React.FC<{
                   <div key={index} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl flex-wrap">
                     <select
                       value={filter.field}
-                      onChange={(e) => updateFilter(index, 'field', e.target.value)}
+                      onChange={(e) => handleFieldChange(index, e.target.value)}
                       className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none bg-white min-w-[140px]"
                     >
                       {filterFields.map(field => (
@@ -443,7 +465,6 @@ const StrategyEditor: React.FC<{
                       <option value="gt">大于</option>
                       <option value="lt">小于</option>
                       <option value="between">区间</option>
-                      <option value="eq">等于</option>
                     </select>
 
                     {filter.operator === 'between' ? (
@@ -452,7 +473,7 @@ const StrategyEditor: React.FC<{
                           <span className="text-xs text-slate-500 whitespace-nowrap">最小值:</span>
                           <input
                             type="number"
-                            value={(filter.value as [number, number])[0]}
+                            value={(filter.value as unknown as [number, number])[0]}
                             onChange={(e) => updateFilterValue(index, 'min', Number(e.target.value))}
                             className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
                           />
@@ -462,7 +483,7 @@ const StrategyEditor: React.FC<{
                           <span className="text-xs text-slate-500 whitespace-nowrap">最大值:</span>
                           <input
                             type="number"
-                            value={(filter.value as [number, number])[1]}
+                            value={(filter.value as unknown as [number, number])[1]}
                             onChange={(e) => updateFilterValue(index, 'max', Number(e.target.value))}
                             className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
                           />
@@ -473,7 +494,7 @@ const StrategyEditor: React.FC<{
                       <div className="flex items-center gap-2 flex-1 min-w-[150px]">
                         <input
                           type="number"
-                          value={filter.value as number}
+                          value={filter.value as unknown as number}
                           onChange={(e) => updateFilterValue(index, 'single', Number(e.target.value))}
                           className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
                         />
@@ -527,10 +548,13 @@ const StrategyEditor: React.FC<{
 };
 
 const Strategy: React.FC = () => {
-  const { myStrategies, strategies, addMyStrategy, updateMyStrategy, deleteMyStrategy } = useAppStore();
+  const { myStrategies, strategies, addMyStrategy, updateMyStrategy, deleteMyStrategy, fetchInitialData } = useAppStore();
   const [showEditor, setShowEditor] = useState(false);
   const [editingStrategy, setEditingStrategy] = useState<StrategyType | null>(null);
   const [showFactorLibrary, setShowFactorLibrary] = useState(false);
+
+  // 确保策略数据已加载
+  useEffect(() => { fetchInitialData(); }, []);
 
   const handleCreateNew = () => {
     setEditingStrategy(null);
@@ -542,28 +566,36 @@ const Strategy: React.FC = () => {
     setShowEditor(true);
   };
 
-  const handleDuplicate = (strategy: StrategyType) => {
+  const handleDuplicate = async (strategy: StrategyType) => {
     const newStrategy: StrategyType = {
       ...strategy,
-      id: `strategy-${Date.now()}`,
+      id: `user-${Date.now()}`,
       name: `${strategy.name} (副本)`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     addMyStrategy(newStrategy);
+    // 同步到服务端
+    try { await saveStrategy(newStrategy); } catch {}
   };
 
-  const handleDelete = (strategyId: string) => {
+  const handleDelete = async (strategyId: string) => {
     if (window.confirm('确定要删除这个策略吗？')) {
       deleteMyStrategy(strategyId);
+      // 同步到服务端
+      try { await deleteStrategy(strategyId); } catch {}
     }
   };
 
-  const handleSave = (strategy: StrategyType) => {
+  const handleSave = async (strategy: StrategyType) => {
     if (editingStrategy) {
       updateMyStrategy(strategy);
+      // 同步到服务端
+      try { await updateStrategy(strategy.id, strategy); } catch {}
     } else {
       addMyStrategy(strategy);
+      // 同步到服务端
+      try { await saveStrategy(strategy); } catch {}
     }
     setShowEditor(false);
     setEditingStrategy(null);

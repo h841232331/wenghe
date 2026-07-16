@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { TrendingUp, TrendingDown, Activity, BarChart3, RefreshCw } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, BarChart3, RefreshCw, ChevronDown } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { StockQuote, MarketOverview } from '@/types';
+import { fetchTopGainers, fetchTopLosers, fetchTopVolume } from '@/api';
 
 // 市场指数卡片组件
 const MarketIndexCard: React.FC<{
@@ -58,15 +59,19 @@ const StatCard: React.FC<{
   </div>
 );
 
-// 热门股票表格组件
+// 热门股票表格组件 - 支持加载更多
 const HotStockTable: React.FC<{
   title: string;
   stocks: StockQuote[];
   type: 'gainers' | 'losers' | 'volume';
-}> = ({ title, stocks, type }) => (
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+}> = ({ title, stocks, type, onLoadMore, loadingMore, hasMore }) => (
   <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-    <div className="px-6 py-4 border-b border-slate-200">
+    <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
       <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
+      <span className="text-xs text-slate-400">{stocks.length}条</span>
     </div>
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -115,15 +120,134 @@ const HotStockTable: React.FC<{
         </tbody>
       </table>
     </div>
+    {hasMore && onLoadMore && (
+      <div className="px-6 py-3 border-t border-slate-100 bg-slate-50">
+        <button
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          className="w-full flex items-center justify-center gap-2 py-2 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+        >
+          {loadingMore ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              加载中...
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-4 h-4" />
+              加载更多（拉取最新20条）
+            </>
+          )}
+        </button>
+      </div>
+    )}
   </div>
 );
 
 const Dashboard: React.FC = () => {
   const { marketOverview, topGainers, topLosers, topVolume, loading, fetchInitialData, refreshMarketData } = useAppStore();
 
+  // 加载更多状态
+  const [gainersOffset, setGainersOffset] = useState(0);
+  const [losersOffset, setLosersOffset] = useState(0);
+  const [volumeOffset, setVolumeOffset] = useState(0);
+  const [loadingGainers, setLoadingGainers] = useState(false);
+  const [loadingLosers, setLoadingLosers] = useState(false);
+  const [loadingVolume, setLoadingVolume] = useState(false);
+  const [allGainers, setAllGainers] = useState<StockQuote[]>([]);
+  const [allLosers, setAllLosers] = useState<StockQuote[]>([]);
+  const [allVolume, setAllVolume] = useState<StockQuote[]>([]);
+  const [hasMoreGainers, setHasMoreGainers] = useState(true);
+  const [hasMoreLosers, setHasMoreLosers] = useState(true);
+  const [hasMoreVolume, setHasMoreVolume] = useState(true);
+
   useEffect(() => {
     fetchInitialData();
   }, []);
+
+  // 同步初始数据到本地列表
+  useEffect(() => {
+    if (topGainers.length > 0 && allGainers.length === 0) {
+      setAllGainers(topGainers);
+      setGainersOffset(topGainers.length);
+    }
+  }, [topGainers]);
+  useEffect(() => {
+    if (topLosers.length > 0 && allLosers.length === 0) {
+      setAllLosers(topLosers);
+      setLosersOffset(topLosers.length);
+    }
+  }, [topLosers]);
+  useEffect(() => {
+    if (topVolume.length > 0 && allVolume.length === 0) {
+      setAllVolume(topVolume);
+      setVolumeOffset(topVolume.length);
+    }
+  }, [topVolume]);
+
+  const loadMoreGainers = useCallback(async () => {
+    setLoadingGainers(true);
+    try {
+      const newData = await fetchTopGainers(gainersOffset + 20);
+      if (newData.length === 0) {
+        setHasMoreGainers(false);
+      } else {
+        const existingCodes = new Set(allGainers.map(s => s.code));
+        const unique = newData.filter(s => !existingCodes.has(s.code));
+        setAllGainers(prev => [...prev, ...unique]);
+        setGainersOffset(prev => prev + 20);
+        if (newData.length < 20) setHasMoreGainers(false);
+      }
+    } catch {
+      setHasMoreGainers(false);
+    } finally {
+      setLoadingGainers(false);
+    }
+  }, [gainersOffset, allGainers]);
+
+  const loadMoreLosers = useCallback(async () => {
+    setLoadingLosers(true);
+    try {
+      const newData = await fetchTopLosers(losersOffset + 20);
+      if (newData.length === 0) {
+        setHasMoreLosers(false);
+      } else {
+        const existingCodes = new Set(allLosers.map(s => s.code));
+        const unique = newData.filter(s => !existingCodes.has(s.code));
+        setAllLosers(prev => [...prev, ...unique]);
+        setLosersOffset(prev => prev + 20);
+        if (newData.length < 20) setHasMoreLosers(false);
+      }
+    } catch {
+      setHasMoreLosers(false);
+    } finally {
+      setLoadingLosers(false);
+    }
+  }, [losersOffset, allLosers]);
+
+  const loadMoreVolume = useCallback(async () => {
+    setLoadingVolume(true);
+    try {
+      const newData = await fetchTopVolume(volumeOffset + 20);
+      if (newData.length === 0) {
+        setHasMoreVolume(false);
+      } else {
+        const existingCodes = new Set(allVolume.map(s => s.code));
+        const unique = newData.filter(s => !existingCodes.has(s.code));
+        setAllVolume(prev => [...prev, ...unique]);
+        setVolumeOffset(prev => prev + 20);
+        if (newData.length < 20) setHasMoreVolume(false);
+      }
+    } catch {
+      setHasMoreVolume(false);
+    } finally {
+      setLoadingVolume(false);
+    }
+  }, [volumeOffset, allVolume]);
+
+  const displayGainers = allGainers.length > 0 ? allGainers : topGainers;
+  const displayLosers = allLosers.length > 0 ? allLosers : topLosers;
+  const displayVolume = allVolume.length > 0 ? allVolume : topVolume;
 
   // 涨跌分布图表配置
   const getDistributionOption = () => {
@@ -265,6 +389,20 @@ const Dashboard: React.FC = () => {
         </div>
       )}
 
+      {!loading && !mo && (
+        <div className="flex flex-col items-center justify-center py-20 bg-white rounded-xl shadow-sm border border-slate-200">
+          <Activity className="w-12 h-12 text-slate-300 mb-4" />
+          <p className="text-slate-500 mb-2">数据加载失败</p>
+          <button
+            onClick={() => refreshMarketData()}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <RefreshCw className="w-4 h-4" />
+            重新加载
+          </button>
+        </div>
+      )}
+
       {mo && (
         <>
           {/* 市场指数 */}
@@ -289,7 +427,7 @@ const Dashboard: React.FC = () => {
             />
             <StatCard
               title="总成交额"
-              value={`${(mo.totalAmount / 100000000).toFixed(0)}亿`}
+              value={`${mo.totalAmount.toFixed(0)}亿`}
               icon={<Activity className="w-6 h-6 text-white" />}
               color="bg-amber-500"
             />
@@ -315,9 +453,30 @@ const Dashboard: React.FC = () => {
 
           {/* 热门股票 */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <HotStockTable title="涨幅榜" stocks={topGainers.slice(0, 5)} type="gainers" />
-            <HotStockTable title="跌幅榜" stocks={topLosers.slice(0, 5)} type="losers" />
-            <HotStockTable title="成交额排行" stocks={topVolume.slice(0, 5)} type="volume" />
+            <HotStockTable
+              title="涨幅榜"
+              stocks={displayGainers}
+              type="gainers"
+              onLoadMore={loadMoreGainers}
+              loadingMore={loadingGainers}
+              hasMore={hasMoreGainers}
+            />
+            <HotStockTable
+              title="跌幅榜"
+              stocks={displayLosers}
+              type="losers"
+              onLoadMore={loadMoreLosers}
+              loadingMore={loadingLosers}
+              hasMore={hasMoreLosers}
+            />
+            <HotStockTable
+              title="成交额排行"
+              stocks={displayVolume}
+              type="volume"
+              onLoadMore={loadMoreVolume}
+              loadingMore={loadingVolume}
+              hasMore={hasMoreVolume}
+            />
           </div>
         </>
       )}

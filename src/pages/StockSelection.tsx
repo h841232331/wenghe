@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { Target, Play, Download, BarChart3, PieChart, Info, ChevronDown, X, Plus, TrendingUp, DollarSign, LineChart, BarChart, Filter } from 'lucide-react';
 import { useAppStore } from '@/store';
@@ -155,10 +156,34 @@ const FilterPanel: React.FC<{
   const [isExpanded, setIsExpanded] = useState(true);
 
   const addFilter = () => {
+    // 默认添加PE小于20的筛选
     onFiltersChange([
       ...filters,
-      { field: 'pe', operator: 'lt', value: 20 }
+      { field: 'pe', operator: 'lt', value: String(20), id: "", label: "", value2: "", unit: "" }
     ]);
+  };
+
+  const getDefaultValue = (field: string): number => {
+    const defaults: Record<string, number> = {
+      pe: 20, pb: 3, roe: 15, marketCap: 500,
+      price: 50, changePercent: 3, turnover: 5,
+      volume: 100000, amount: 10000, amplitude: 5, volumeRatio: 1.5,
+      ps: 5, peg: 1, roa: 10, grossMargin: 30, netMargin: 15,
+      debtRatio: 50, cashFlowRatio: 0.5,
+      revenueGrowth: 20, profitGrowth: 20, roeGrowth: 15, grossMarginGrowth: 10,
+      ma5: 50, ma10: 50, ma20: 50, ma60: 50,
+      rsi: 50, macd: 0, kdj_k: 50, kdj_d: 50,
+      boll_upper: 100, boll_lower: 50,
+      ev_ebitda: 15, circulatingMarketCap: 200,
+    };
+    return defaults[field] || 0;
+  };
+
+  const handleFieldChange = (index: number, field: string) => {
+    const newFilters = [...filters];
+    const newFilter = { ...newFilters[index], field, value: String(getDefaultValue(field)) };
+    newFilters[index] = newFilter;
+    onFiltersChange(newFilters);
   };
 
   const removeFilter = (index: number) => {
@@ -174,7 +199,7 @@ const FilterPanel: React.FC<{
   const updateValue = (index: number, position: 'min' | 'max', value: number) => {
     const filter = filters[index];
     if (filter.operator === 'between') {
-      const currentValue = filter.value as [number, number];
+      const currentValue = filter.value as unknown as [number, number];
       const newValue: [number, number] = position === 'min' 
         ? [value, currentValue[1]]
         : [currentValue[0], value];
@@ -220,7 +245,7 @@ const FilterPanel: React.FC<{
               <div key={index} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
                 <select
                   value={filter.field}
-                  onChange={e => updateFilter(index, 'field', e.target.value)}
+                  onChange={e => handleFieldChange(index, e.target.value)}
                   className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none bg-white min-w-[140px]"
                 >
                   {filterFields.map(field => (
@@ -245,7 +270,6 @@ const FilterPanel: React.FC<{
                   <option value="gt">大于</option>
                   <option value="lt">小于</option>
                   <option value="between">区间</option>
-                  <option value="eq">等于</option>
                 </select>
                 
                 {filter.operator === 'between' ? (
@@ -254,7 +278,7 @@ const FilterPanel: React.FC<{
                       <span className="text-xs text-slate-500 whitespace-nowrap">最小值:</span>
                       <input
                         type="number"
-                        value={(filter.value as [number, number])[0]}
+                        value={(filter.value as unknown as [number, number])[0]}
                         onChange={e => updateValue(index, 'min', Number(e.target.value))}
                         className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 outline-none"
                       />
@@ -264,7 +288,7 @@ const FilterPanel: React.FC<{
                       <span className="text-xs text-slate-500 whitespace-nowrap">最大值:</span>
                       <input
                         type="number"
-                        value={(filter.value as [number, number])[1]}
+                        value={(filter.value as unknown as [number, number])[1]}
                         onChange={e => updateValue(index, 'max', Number(e.target.value))}
                         className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 outline-none"
                       />
@@ -275,7 +299,7 @@ const FilterPanel: React.FC<{
                   <div className="flex items-center gap-2 flex-1">
                     <input
                       type="number"
-                      value={filter.value as number}
+                      value={filter.value as unknown as number}
                       onChange={e => updateFilter(index, 'value', Number(e.target.value))}
                       className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 outline-none"
                     />
@@ -308,7 +332,42 @@ const FilterPanel: React.FC<{
 
 // 选股结果表格组件
 const ResultTable: React.FC = () => {
-  const { currentSelectionResult } = useAppStore();
+  const { currentSelectionResult, selectedStrategy, setSelectedStock, setSelectedStrategy: setBacktestStrategy } = useAppStore();
+  const navigate = useNavigate();
+
+  const handleAddToBacktest = (stock: any) => {
+    setSelectedStock(stock);
+    if (selectedStrategy) {
+      setBacktestStrategy(selectedStrategy);
+    }
+    navigate('/backtest');
+  };
+
+  const handleExport = () => {
+    if (!currentSelectionResult || currentSelectionResult.stocks.length === 0) return;
+    
+    const headers = ['排名', '代码', '名称', '行业', '得分', '最新价', '涨跌幅', '市盈率'];
+    const rows = currentSelectionResult.stocks.map(item => [
+      item.rank,
+      item.stock.code,
+      item.stock.name,
+      item.stock.industry,
+      item.score.toFixed(1),
+      item.quote.price.toFixed(2),
+      item.quote.changePercent.toFixed(2) + '%',
+      item.stock.pe.toFixed(2),
+    ]);
+
+    const bom = '\uFEFF';
+    const csvContent = [headers, ...rows].map(row => row.join(',')).join('\n');
+    const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `选股结果_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (!currentSelectionResult || currentSelectionResult.stocks.length === 0) {
     return (
@@ -334,7 +393,7 @@ const ResultTable: React.FC = () => {
             </span>
           </p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors shadow-sm">
+        <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors shadow-sm">
           <Download className="w-4 h-4" />
           导出结果
         </button>
@@ -402,7 +461,7 @@ const ResultTable: React.FC = () => {
                   {item.stock.pe.toFixed(2)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-center">
-                  <button className="text-amber-600 hover:text-amber-700 text-sm font-medium hover:underline">
+                  <button onClick={() => handleAddToBacktest(item.stock)} className="text-amber-600 hover:text-amber-700 text-sm font-medium hover:underline">
                     加入回测
                   </button>
                 </td>

@@ -11,8 +11,196 @@
  */
 
 import { DataSource, StockInfo, StockQuote, MarketOverview, KlineData, FinancialIndicators } from './index';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 
-// ── 工具函数 ────────────────────────────────────────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ── 股票名称缓存 ────────────────────────────────────────────────────
+// 从东财 clist 预加载的全量股票列表，用于名称搜索降级
+interface CachedStock {
+  code: string;
+  name: string;
+  industry: string;
+}
+
+let stockNameCache: CachedStock[] = [];
+let stockCacheLoaded = false;
+
+function loadStockCache(): void {
+  if (stockCacheLoaded) return;
+  try {
+    const cachePath = path.join(__dirname, '..', 'data', 'stocks.json');
+    if (fs.existsSync(cachePath)) {
+      const raw = fs.readFileSync(cachePath, 'utf-8');
+      stockNameCache = JSON.parse(raw);
+      stockCacheLoaded = true;
+      console.log(`[StockCache] Loaded ${stockNameCache.length} stocks from cache`);
+    }
+  } catch (e) {
+    console.error('[StockCache] Failed to load cache:', e);
+  }
+}
+
+// 模块加载时尝试加载缓存
+loadStockCache();
+
+// ── 行情缓存 ────────────────────────────────────────────────────────
+// 腾讯 API 批量拉取全市场行情，缓存到文件，避免每次请求都拉全量数据
+interface MarketCache {
+  updatedAt: number;
+  totalStocks: number;
+  upCount: number;
+  downCount: number;
+  flatCount: number;
+  totalAmount: number; // 元
+  quotes: Record<string, {
+    code: string; name: string; price: number; change: number; changePercent: number;
+    volume: number; amount: number; turnover: number;
+    high: number; low: number; open: number; preClose: number;
+  }>;
+}
+
+let marketCache: MarketCache | null = null;
+let cacheUpdating = false;
+const CACHE_PATH = path.join(__dirname, '..', 'data', 'market-cache.json');
+const CACHE_TTL = 5 * 60 * 1000; // 5分钟
+const BATCH_SIZE = 300; // 每批 300 只股票
+
+function loadMarketCache(): MarketCache | null {
+  try {
+    if (fs.existsSync(CACHE_PATH)) {
+      const raw = fs.readFileSync(CACHE_PATH, 'utf-8');
+      const cache = JSON.parse(raw) as MarketCache;
+      if (Date.now() - cache.updatedAt < CACHE_TTL) {
+        console.log(`[MarketCache] Loaded valid cache (${Math.round((Date.now() - cache.updatedAt) / 1000)}s old)`);
+        return cache;
+      }
+    }
+  } catch (e) {
+    console.warn('[MarketCache] Failed to load cache:', e);
+  }
+  return null;
+}
+
+function saveMarketCache(cache: MarketCache): void {
+  try {
+    fs.writeFileSync(CACHE_PATH, JSON.stringify(cache));
+    console.log(`[MarketCache] Saved ${Object.keys(cache.quotes).length} quotes`);
+  } catch (e) {
+    console.warn('[MarketCache] Failed to save cache:', e);
+  }
+}
+
+async function refreshMarketCache(): Promise<MarketCache> {
+  if (cacheUpdating) {
+    // 等待正在进行的更新完成
+    for (let i = 0; i < 30; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (marketCache && Date.now() - marketCache.updatedAt < 60000) return marketCache;
+    }
+    if (marketCache) return marketCache;
+  }
+
+  cacheUpdating = true;
+  try {
+    // 确保股票缓存已加载
+    if (!stockCacheLoaded) loadStockCache();
+    const allCodes = stockNameCache.map(s => s.code);
+    if (allCodes.length === 0) throw new Error('No stock codes available');
+
+    let upCount = 0, downCount = 0, flatCount = 0, totalAmount = 0;
+    const quotes: MarketCache['quotes'] = {};
+
+    const totalBatches = Math.ceil(allCodes.length / BATCH_SIZE);
+    console.log(`[MarketCache] Refreshing from Tencent API: ${allCodes.length} stocks in ${totalBatches} batches`);
+
+    for (let i = 0; i < totalBatches; i++) {
+      const batch = allCodes.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+      const tencentCodes = batch.map(c => c.startsWith('6') ? `sh${c}` : `sz${c}`).join(',');
+      
+      try {
+        const resp = await fetchWithTimeout(`https://qt.gtimg.cn/q=${tencentCodes}`, {}, 15000);
+        const buffer = await resp.arrayBuffer();
+        const text = new TextDecoder('gbk').decode(buffer);
+        const lines = text.split(';').filter(l => l.trim());
+
+        for (const line of lines) {
+          const match = line.match(/v_(\w+)="(.+)"/);
+          if (!match) continue;
+          const fields = match[2].split('~');
+          if (fields.length < 35) continue;
+
+          const code = fields[2] || '';
+          const price = Number(fields[3]) || 0;
+          const changePct = Number(fields[32]) || 0;
+          const amount = (Number(fields[37]) || 0) * 10000; // 万元 → 元
+
+          if (changePct > 0) upCount++;
+          else if (changePct < 0) downCount++;
+          else flatCount++;
+          totalAmount += amount;
+
+          quotes[code] = {
+            code,
+            name: fields[1] || '',
+            price,
+            change: Number(fields[31]) || 0,
+            changePercent: changePct,
+            volume: Number(fields[6]) || 0,
+            amount,
+            turnover: Number(fields[38]) || 0,
+            high: Number(fields[33]) || 0,
+            low: Number(fields[34]) || 0,
+            open: Number(fields[5]) || 0,
+            preClose: Number(fields[4]) || 0,
+          };
+        }
+      } catch (e) {
+        console.warn(`[MarketCache] Batch ${i + 1}/${totalBatches} failed:`, (e as Error).message);
+      }
+
+      // 批次间延迟
+      if (i < totalBatches - 1) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    const cache: MarketCache = {
+      updatedAt: Date.now(),
+      totalStocks: allCodes.length,
+      upCount, downCount, flatCount,
+      totalAmount,
+      quotes,
+    };
+
+    marketCache = cache;
+    saveMarketCache(cache);
+    console.log(`[MarketCache] Refreshed: up=${upCount} down=${downCount} flat=${flatCount} amount=${Math.round(totalAmount / 1e8)}亿`);
+    return cache;
+  } finally {
+    cacheUpdating = false;
+  }
+}
+
+function getMarketCache(): MarketCache | null {
+  if (!marketCache || Date.now() - marketCache.updatedAt >= CACHE_TTL) {
+    marketCache = loadMarketCache();
+  }
+  return marketCache;
+}
+
+// 启动时异步刷新缓存
+setTimeout(() => {
+  refreshMarketCache().catch(e => console.warn('[MarketCache] Initial refresh failed:', e));
+}, 1000);
+
+// 每5分钟自动刷新
+setInterval(() => {
+  refreshMarketCache().catch(e => console.warn('[MarketCache] Periodic refresh failed:', e));
+}, CACHE_TTL);
 
 /** 6位股票代码 → 东财 secid（沪市 1.，深市/创业板 0.） */
 function toSecid(code: string): string {
@@ -237,67 +425,101 @@ export const realDataSource: DataSource = {
   async searchStocks(keyword: string): Promise<StockInfo[]> {
     try {
       if (!keyword) {
-        // 无关键字时返回热门股票（按成交额降序取前20）
         const rows = await fetchClist(1, 20, 'f6', 0);
         return rows.map(parseClistToStockInfo);
       }
 
-      // 用东财搜索接口
-      const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20`;
-      const resp = await fetchWithTimeout(url, { headers: EM_HEADERS });
-      const json: any = await resp.json();
-      const suggestions = json?.QuotationCodeTable?.Data || [];
+      const k = keyword.trim();
 
-      // 获取这些股票的详细信息
-      const codes: string[] = suggestions.map((s: any) => s.Code).filter((c: string) => c && /^\d{6}$/.test(c));
-      if (codes.length === 0) return [];
-
-      // 用 stock/get 批量获取
-      const results = await Promise.all(codes.slice(0, 20).map(async code => {
+      // 1. 纯6位数字代码 → 直接用 stock/get 直查（最快）
+      if (/^\d{6}$/.test(k)) {
         try {
-          const detail = await fetchStockDetail(code);
-          return {
-            code: String(detail.f57 || code),
-            name: String(detail.f58 || ''),
-            industry: String(detail.f127 || '未分类'),
-            market: code.startsWith('6') ? 'SH' : 'SZ',
-            marketCap: Math.round((Number(detail.f116) || 0) / 1e8),
-            pe: Number(detail.f162) || 0,
-            pb: Number(detail.f167) || 0,
-            roe: Number(detail.f173) || 0,
-          } as StockInfo;
-        } catch {
-          return null;
-        }
-      }));
+          const detail = await fetchStockDetail(k);
+          if (detail && detail.f57) {
+            return [{
+              code: String(detail.f57 || k),
+              name: String(detail.f58 || ''),
+              industry: String(detail.f127 || '未分类'),
+              market: k.startsWith('6') ? 'SH' : 'SZ',
+              marketCap: Math.round((Number(detail.f116) || 0) / 1e8),
+              pe: Number(detail.f162) || 0,
+              pb: Number(detail.f167) || 0,
+              roe: Number(detail.f173) || 0,
+            }];
+          }
+        } catch {}
+      }
 
-      return results.filter(Boolean) as StockInfo[];
+      // 2. 优先从本地缓存搜索（最快，无网络开销）
+      if (stockNameCache.length > 0) {
+        const cached = stockNameCache.filter(s =>
+          s.code.includes(k) || s.name.includes(k) || s.industry.includes(k)
+        ).slice(0, 20);
+        if (cached.length > 0) {
+          return cached.map(s => ({
+            code: s.code,
+            name: s.name,
+            industry: s.industry,
+            market: (s.code.startsWith('6') || s.code.startsWith('9') ? 'SH' : 'SZ') as 'SH' | 'SZ',
+            marketCap: 0, pe: 0, pb: 0, roe: 0,
+          }));
+        }
+      }
+
+      // 3. 从 clist 搜索（500只热门股）
+      try {
+        const rows = await fetchClist(1, 500, 'f6', 0);
+        const filtered = rows.filter(r =>
+          String(r.f12).includes(k) || String(r.f14).includes(k)
+        );
+        if (filtered.length > 0) {
+          return filtered.slice(0, 20).map(parseClistToStockInfo);
+        }
+      } catch {}
+
+      // 4. 最后尝试东财搜索API（最慢，可能不可达）
+      try {
+        const url = `https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(k)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20`;
+        const resp = await fetchWithTimeout(url, { headers: EM_HEADERS }, 3000);
+        const json: any = await resp.json();
+        const suggestions = json?.QuotationCodeTable?.Data || [];
+        const codes: string[] = suggestions.map((s: any) => s.Code).filter((c: string) => c && /^\d{6}$/.test(c));
+        if (codes.length > 0) {
+          const results = await Promise.all(codes.slice(0, 20).map(async code => {
+            try {
+              const detail = await fetchStockDetail(code);
+              return {
+                code: String(detail.f57 || code),
+                name: String(detail.f58 || ''),
+                industry: String(detail.f127 || '未分类'),
+                market: code.startsWith('6') ? 'SH' : 'SZ',
+                marketCap: Math.round((Number(detail.f116) || 0) / 1e8),
+                pe: Number(detail.f162) || 0,
+                pb: Number(detail.f167) || 0,
+                roe: Number(detail.f173) || 0,
+              } as StockInfo;
+            } catch { return null; }
+          }));
+          return results.filter(Boolean) as StockInfo[];
+        }
+      } catch {}
+
+      return [];
     } catch (e) {
       console.error('[RealDataSource] searchStocks failed:', e);
-      // 降级：从 clist 中过滤
-      try {
-        const rows = await fetchClist(1, 100, 'f6', 0);
-        const filtered = rows.filter(r =>
-          String(r.f12).includes(keyword) || String(r.f14).includes(keyword)
-        );
-        return filtered.slice(0, 20).map(parseClistToStockInfo);
-      } catch {
-        return [];
-      }
+      return [];
     }
   },
 
   /**
    * 获取市场概览
-   * 指数数据优先用腾讯 API（更可靠，不封IP），涨跌统计用东财
+   * 指数数据用腾讯 API，涨跌统计从行情缓存读取
    */
   async getMarketOverview(): Promise<MarketOverview> {
     let shIndex = 0, shChange = 0, shChangePercent = 0;
     let szIndex = 0, szChange = 0, szChangePercent = 0;
-    let totalStocks = 0, upCount = 0, downCount = 0, flatCount = 0;
-    let totalVolume = 0, totalAmount = 0;
 
-    // 1. 用腾讯 API 获取指数数据（最可靠，不封IP）
+    // 1. 用腾讯 API 获取指数数据
     try {
       const tencentCodes = ['sh000001', 'sz399001'];
       const resp = await fetchWithTimeout(`https://qt.gtimg.cn/q=${tencentCodes.join(',')}`, {});
@@ -311,8 +533,6 @@ export const realDataSource: DataSource = {
         const fields = match[2].split('~');
         if (fields.length < 35) continue;
 
-        // 腾讯字段: 0=未知, 1=名称, 2=代码, 3=当前价, 4=昨收, 5=今开,
-        // 31=涨跌额, 32=涨跌幅(%), 33=最高, 34=最低
         const code = fields[2] || '';
         const price = Number(fields[3]) || 0;
         const changeVal = Number(fields[31]) || 0;
@@ -329,110 +549,79 @@ export const realDataSource: DataSource = {
         }
       }
     } catch (e) {
-      console.warn('[RealDataSource] 腾讯指数获取失败，降级到东财:', e);
+      console.warn('[RealDataSource] 腾讯指数获取失败:', e);
     }
 
-    // 2. 用东财 API 获取全市场涨跌统计
-    try {
-      const url = `https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=6000&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3,f4,f5,f6,f12,f14`;
-      const resp = await fetchWithTimeout(url, { headers: EM_HEADERS });
-      const json: any = await resp.json();
-      const stocks = json?.data?.diff || [];
-
-      totalStocks = stocks.length;
-      for (const s of stocks) {
-        const pct = Number(s.f3) || 0;
-        if (pct > 0) upCount++;
-        else if (pct < 0) downCount++;
-        else flatCount++;
-        totalVolume += Number(s.f5) || 0;
-        totalAmount += Number(s.f6) || 0;
-      }
-    } catch (e) {
-      console.warn('[RealDataSource] 东财涨跌统计失败:', e);
-    }
-
-    // 3. 如果腾讯没拿到指数，用东财补充
-    if (shIndex === 0 || szIndex === 0) {
-      try {
-        const shResp = await fetchWithTimeout(
-          `https://push2.eastmoney.com/api/qt/stock/get?secid=1.000001&fields=f43,f170,f169`,
-          { headers: EM_HEADERS }
-        );
-        const shJson: any = await shResp.json();
-        if (shJson?.data) {
-          // 东财 f43 返回厘为单位（396528 表示 3965.28），需除以 100
-          shIndex = shIndex || Number(shJson.data.f43) / 100 || 0;
-          shChange = shChange || Number(shJson.data.f170) || 0;
-          shChangePercent = shChangePercent || Number(shJson.data.f169) || 0;
-        }
-
-        const szResp = await fetchWithTimeout(
-          `https://push2.eastmoney.com/api/qt/stock/get?secid=0.399001&fields=f43,f170,f169`,
-          { headers: EM_HEADERS }
-        );
-        const szJson: any = await szResp.json();
-        if (szJson?.data) {
-          szIndex = szIndex || Number(szJson.data.f43) / 100 || 0;
-          szChange = szChange || Number(szJson.data.f170) || 0;
-          szChangePercent = szChangePercent || Number(szJson.data.f169) || 0;
-        }
-      } catch (e) {
-        console.warn('[RealDataSource] 东财指数补充也失败:', e);
-      }
-    }
+    // 2. 从行情缓存获取涨跌统计
+    const cache = getMarketCache();
+    const upCount = cache?.upCount ?? 0;
+    const downCount = cache?.downCount ?? 0;
+    const flatCount = cache?.flatCount ?? 0;
+    const totalStocks = cache?.totalStocks ?? 5539;
+    const totalAmount = cache?.totalAmount ?? 0;
 
     return {
-      totalStocks: totalStocks || 5234,
+      totalStocks,
       upCount, downCount, flatCount,
-      totalVolume,
-      totalAmount: Math.round(totalAmount / 1e4),
-      shIndex,
-      shChange,
-      shChangePercent,
-      szIndex,
-      szChange,
-      szChangePercent,
+      totalVolume: 0,
+      totalAmount: Math.round(totalAmount / 1e8), // 元 → 亿元
+      shIndex, shChange, shChangePercent,
+      szIndex, szChange, szChangePercent,
     };
   },
 
   /**
-   * 涨幅榜
+   * 涨幅榜 - 从行情缓存排序
    */
   async getTopGainers(limit: number = 10): Promise<StockQuote[]> {
-    try {
-      const rows = await fetchClist(1, limit, 'f3', 0); // f3=涨跌幅 降序
-      return rows.map(parseClistToQuote);
-    } catch (e) {
-      console.error('[RealDataSource] getTopGainers failed:', e);
-      return [];
-    }
+    const cache = getMarketCache();
+    if (!cache) return [];
+    const quotes = Object.values(cache.quotes);
+    return quotes
+      .sort((a, b) => b.changePercent - a.changePercent)
+      .slice(0, limit)
+      .map(q => ({
+        code: q.code, name: q.name, price: q.price,
+        change: q.change, changePercent: q.changePercent,
+        volume: q.volume, amount: q.amount, turnover: q.turnover,
+        high: q.high, low: q.low, open: q.open, preClose: q.preClose,
+      }));
   },
 
   /**
-   * 跌幅榜
+   * 跌幅榜 - 从行情缓存排序
    */
   async getTopLosers(limit: number = 10): Promise<StockQuote[]> {
-    try {
-      const rows = await fetchClist(1, limit, 'f3', 1); // f3=涨跌幅 升序
-      return rows.map(parseClistToQuote);
-    } catch (e) {
-      console.error('[RealDataSource] getTopLosers failed:', e);
-      return [];
-    }
+    const cache = getMarketCache();
+    if (!cache) return [];
+    const quotes = Object.values(cache.quotes);
+    return quotes
+      .sort((a, b) => a.changePercent - b.changePercent)
+      .slice(0, limit)
+      .map(q => ({
+        code: q.code, name: q.name, price: q.price,
+        change: q.change, changePercent: q.changePercent,
+        volume: q.volume, amount: q.amount, turnover: q.turnover,
+        high: q.high, low: q.low, open: q.open, preClose: q.preClose,
+      }));
   },
 
   /**
-   * 成交额榜
+   * 成交额榜 - 从行情缓存排序
    */
   async getTopVolume(limit: number = 10): Promise<StockQuote[]> {
-    try {
-      const rows = await fetchClist(1, limit, 'f6', 0); // f6=成交额 降序
-      return rows.map(parseClistToQuote);
-    } catch (e) {
-      console.error('[RealDataSource] getTopVolume failed:', e);
-      return [];
-    }
+    const cache = getMarketCache();
+    if (!cache) return [];
+    const quotes = Object.values(cache.quotes);
+    return quotes
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, limit)
+      .map(q => ({
+        code: q.code, name: q.name, price: q.price,
+        change: q.change, changePercent: q.changePercent,
+        volume: q.volume, amount: q.amount, turnover: q.turnover,
+        high: q.high, low: q.low, open: q.open, preClose: q.preClose,
+      }));
   },
 
   /**
