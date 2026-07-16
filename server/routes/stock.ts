@@ -116,16 +116,20 @@ router.get('/overview/:code', async (req, res, next) => {
       console.warn(`[StockOverview] Quote fetch failed for ${code}:`, e);
     }
 
-    // 2. 获取K线数据（最近60个交易日）
+    // 2. 获取K线数据（默认日线800条=3年，可通过period参数切换日/周/月）
+    const period = (req.query.period as string) || 'day';
+    const count = period === 'month' ? 200 : period === 'week' ? 800 : 800;
+    const periodKey = period === 'month' ? 'month' : period === 'week' ? 'week' : 'day';
+    const dataKey = period === 'month' ? 'qfqmonth' : period === 'week' ? 'qfqweek' : 'qfqday';
     let kline: any[] = [];
     try {
-      const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${prefix}${code},day,,,60,qfq`;
+      const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${prefix}${code},${periodKey},,,${count},qfq`;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
       const resp = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
       const json: any = await resp.json();
-      const dayData = json?.data?.[`${prefix}${code}`]?.day || json?.data?.[`${prefix}${code}`]?.qfqday || [];
+      const dayData = json?.data?.[`${prefix}${code}`]?.[dataKey] || json?.data?.[`${prefix}${code}`]?.day || [];
       kline = dayData
         .map((d: any[]) => ({
           date: d[0],

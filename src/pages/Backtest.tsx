@@ -91,18 +91,21 @@ const Backtest: React.FC = () => {
   } | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
 
+  // K线周期
+  const [klinePeriod, setKlinePeriod] = useState<string>('day');
+
   useEffect(() => {
     if (selectedStock) {
       setOverviewLoading(true);
       setChartMode('kline');
-      fetchStockOverview(selectedStock.code)
+      fetchStockOverview(selectedStock.code, klinePeriod)
         .then(data => setStockOverview(data))
         .catch(() => setStockOverview(null))
         .finally(() => setOverviewLoading(false));
     } else {
       setStockOverview(null);
     }
-  }, [selectedStock]);
+  }, [selectedStock, klinePeriod]);
 
   // 图表模式: kline | intraday
   const [chartMode, setChartMode] = useState<'kline' | 'intraday'>('kline');
@@ -202,7 +205,7 @@ const Backtest: React.FC = () => {
       ],
       dataZoom: [{
         type: 'slider', xAxisIndex: [0, 1],
-        start: 0, end: 100,
+        start: Math.max(0, 100 - (60 / Math.max(kline.length, 1) * 100)), end: 100,
         height: 20, bottom: 0,
         borderColor: '#333',
         backgroundColor: '#1a1a2e',
@@ -273,7 +276,6 @@ const Backtest: React.FC = () => {
     const times = points.map((p: any) => p.time);
     const prices = points.map((p: any) => p.price);
     const volumes = points.map((p: any) => p.volume);
-    const changes = points.map((p: any) => p.changePercent);
     const changePct = intradayData?.qtInfo?.changePercent || 0;
     const color = changePct >= 0 ? '#ef4444' : '#22c55e';
 
@@ -282,41 +284,30 @@ const Backtest: React.FC = () => {
     const priceMin = Math.min(...allPrices);
     const priceMax = Math.max(...allPrices);
     const priceRange = priceMax - priceMin;
-    // 振幅小于0.5%时用最小范围，否则留2%边距
-    const pad = Math.max(priceRange * 0.02, preClose * 0.002);
+    const pad = Math.max(priceRange * 0.05, preClose * 0.003);
     const yMin = priceMin - pad;
     const yMax = priceMax + pad;
 
-    // 涨跌幅范围
-    const changeMin = Math.min(...changes, 0);
-    const changeMax = Math.max(...changes, 0);
-    const changePad = Math.max((changeMax - changeMin) * 0.1, 0.1);
+    // 涨停价/跌停价（A股±10%）
+    const limitUp = +(preClose * 1.10).toFixed(2);
+    const limitDown = +(preClose * 0.90).toFixed(2);
 
-    // 时间轴标签：只显示整半小时
+    // 时间轴标签：显示整半小时
     const labelInterval = Math.max(1, Math.floor(times.length / 8));
-    const timeLabels = times.map((t: string, i: number) => {
-      if (i === 0 || i === times.length - 1) return t;
-      if (i % labelInterval === 0) {
-        const [h, m] = t.split(':').map(Number);
-        if (m === 0 || m === 30) return t;
-        return '';
-      }
-      return '';
-    });
 
     return {
       backgroundColor: '#1a1a2e',
       animation: false,
       grid: [
-        { left: '10%', right: '10%', top: '3%', height: '60%' },
-        { left: '10%', right: '10%', top: '70%', height: '18%' },
+        { left: '10%', right: '4%', top: '5%', height: '60%' },
+        { left: '10%', right: '4%', top: '72%', height: '16%' },
       ],
       xAxis: [
         {
           type: 'category', data: times, gridIndex: 0,
           axisLine: { lineStyle: { color: '#333' } },
           axisTick: { show: false },
-          axisLabel: { color: '#888', fontSize: 10, interval: labelInterval, formatter: (v: string) => v },
+          axisLabel: { color: '#888', fontSize: 10, interval: labelInterval },
           splitLine: { show: false },
         },
         {
@@ -338,15 +329,6 @@ const Backtest: React.FC = () => {
           position: 'left',
         },
         {
-          type: 'value', gridIndex: 0,
-          min: changeMin - changePad, max: changeMax + changePad,
-          axisLine: { show: false },
-          axisTick: { show: false },
-          axisLabel: { color: '#888', fontSize: 10, formatter: (v: number) => v.toFixed(2) + '%' },
-          splitLine: { show: false },
-          position: 'right',
-        },
-        {
           type: 'value', gridIndex: 1,
           axisLine: { show: false },
           axisTick: { show: false },
@@ -363,7 +345,7 @@ const Backtest: React.FC = () => {
           if (!params || params.length < 2) return '';
           const t = params[0].axisValue;
           const price = params[0].value;
-          const chg = params[1].value;
+          const chg = preClose > 0 ? ((price - preClose) / preClose * 100) : 0;
           return `<div style="font-size:13px;font-weight:bold;margin-bottom:4px">${t}</div>
             <div>价格: <span style="color:${color}">${price?.toFixed(2)}</span></div>
             <div>涨跌幅: <span style="color:${color}">${chg?.toFixed(2)}%</span></div>`;
@@ -386,35 +368,23 @@ const Backtest: React.FC = () => {
           symbol: 'none',
           markLine: {
             silent: true, symbol: 'none',
-            data: [{ yAxis: preClose, lineStyle: { color: '#ffcc00', type: 'solid', width: 1, opacity: 0.5 } }],
-            label: { show: false },
+            label: { show: true, position: 'end', fontSize: 10, color: '#888', formatter: '{c}' },
+            data: [
+              { yAxis: preClose, name: '昨收', lineStyle: { color: '#ffcc00', type: 'solid', width: 1, opacity: 0.6 } },
+              { yAxis: limitDown, name: '跌停', lineStyle: { color: '#22c55e', type: 'solid', width: 1.5, opacity: 0.7 }, label: { color: '#22c55e' } },
+              { yAxis: limitUp, name: '涨停', lineStyle: { color: '#ef4444', type: 'solid', width: 1.5, opacity: 0.7 }, label: { color: '#ef4444' } },
+            ],
           },
-        },
-        {
-          name: '涨跌幅', type: 'line', data: changes, smooth: true,
-          xAxisIndex: 0, yAxisIndex: 1,
-          lineStyle: { width: 0.5, color },
-          areaStyle: {
-            color: {
-              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: color + '15' },
-                { offset: 1, color: 'transparent' },
-              ],
-            },
-          },
-          symbol: 'none',
-          show: false,
         },
         {
           name: '成交量', type: 'bar', data: volumes.map((v: number, i: number) => ({
             value: v,
             itemStyle: {
-              color: changes[i] >= 0 ? '#ef4444' : '#22c55e',
+              color: prices[i] >= preClose ? '#ef4444' : '#22c55e',
               opacity: 0.4,
             },
           })),
-          xAxisIndex: 1, yAxisIndex: 2,
+          xAxisIndex: 1, yAxisIndex: 1,
         },
       ],
     };
@@ -521,11 +491,22 @@ const Backtest: React.FC = () => {
                       <div className="flex items-center justify-between mb-1">
                         <div className="flex items-center gap-1 text-xs text-slate-500">
                           <BarChart3 className="w-3 h-3" />
-                          {chartMode === 'kline' ? '近60日K线' : `分时图 ${intradayData?.date || ''}`}
+                          {chartMode === 'kline'
+                            ? `${klinePeriod === 'day' ? '日' : klinePeriod === 'week' ? '周' : '月'}K线 (${stockOverview.kline.length}根)`
+                            : `分时图 ${intradayData?.date || ''}`}
                         </div>
-                        <div className="flex rounded border border-slate-200 overflow-hidden">
-                          <button onClick={() => setChartMode('kline')} className={`px-2 py-0.5 text-xs ${chartMode === 'kline' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>K线</button>
-                          <button onClick={() => setChartMode('intraday')} className={`px-2 py-0.5 text-xs ${chartMode === 'intraday' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>分时</button>
+                        <div className="flex items-center gap-1">
+                          {chartMode === 'kline' && (
+                            <div className="flex rounded border border-slate-200 overflow-hidden mr-1">
+                              <button onClick={() => setKlinePeriod('day')} className={`px-2 py-0.5 text-xs ${klinePeriod === 'day' ? 'bg-slate-700 text-white font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>日K</button>
+                              <button onClick={() => setKlinePeriod('week')} className={`px-2 py-0.5 text-xs ${klinePeriod === 'week' ? 'bg-slate-700 text-white font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>周K</button>
+                              <button onClick={() => setKlinePeriod('month')} className={`px-2 py-0.5 text-xs ${klinePeriod === 'month' ? 'bg-slate-700 text-white font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>月K</button>
+                            </div>
+                          )}
+                          <div className="flex rounded border border-slate-200 overflow-hidden">
+                            <button onClick={() => setChartMode('kline')} className={`px-2 py-0.5 text-xs ${chartMode === 'kline' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>K线</button>
+                            <button onClick={() => setChartMode('intraday')} className={`px-2 py-0.5 text-xs ${chartMode === 'intraday' ? 'bg-amber-100 text-amber-700 font-medium' : 'text-slate-500 hover:bg-slate-50'}`}>分时</button>
+                          </div>
                         </div>
                       </div>
                       {chartMode === 'kline' ? (

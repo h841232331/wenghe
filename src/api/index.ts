@@ -542,12 +542,12 @@ export { setUseMockData, apiConfig };
 /**
  * 获取股票概览（行情+K线）
  */
-export async function fetchStockOverview(code: string): Promise<{
+export async function fetchStockOverview(code: string, period: string = 'week'): Promise<{
   quote: { code: string; name: string; price: number; change: number; changePercent: number; high: number; low: number; open: number; preClose: number; volume: number; amount: number; turnover: number; pe: number; pb: number; marketCap: number } | null;
   kline: { date: string; open: number; close: number; high: number; low: number; volume: number }[];
 }> {
   if (!apiConfig.useMockData && !apiConfig.backendDown) {
-    return realApi.fetchStockOverview(code);
+    return realApi.fetchStockOverview(code, period);
   }
   await delay(200);
   return { quote: null, kline: [] };
