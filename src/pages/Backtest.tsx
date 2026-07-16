@@ -121,7 +121,151 @@ const Backtest: React.FC = () => {
     }
   }, [chartMode, selectedStock]);
 
-  // 分时图配置
+  // 同花顺风格K线图配置
+  const getMiniKlineOption = () => {
+    const kline = stockOverview?.kline || [];
+    if (kline.length === 0) return {};
+    const dates = kline.map((k: any) => k.date);
+    const values = kline.map((k: any) => [k.open, k.close, k.low, k.high]);
+    const volumes = kline.map((k: any) => k.volume);
+
+    // 计算MA均线
+    const calcMA = (period: number) => {
+      const ma: (number | null)[] = [];
+      for (let i = 0; i < kline.length; i++) {
+        if (i < period - 1) { ma.push(null); continue; }
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j++) sum += kline[j].close;
+        ma.push(+(sum / period).toFixed(2));
+      }
+      return ma;
+    };
+
+    // 同花顺经典配色: MA5=白, MA10=黄, MA20=紫, MA60=绿
+    const maConfigs = [
+      { period: 5, color: '#ffffff', name: 'MA5' },
+      { period: 10, color: '#ffcc00', name: 'MA10' },
+      { period: 20, color: '#ff66ff', name: 'MA20' },
+      { period: 60, color: '#00ff66', name: 'MA60' },
+    ];
+
+    const maSeries = maConfigs.map(cfg => ({
+      name: cfg.name,
+      type: 'line',
+      data: calcMA(cfg.period),
+      smooth: true,
+      symbol: 'none',
+      xAxisIndex: 0,
+      yAxisIndex: 0,
+      lineStyle: { width: 1, color: cfg.color, opacity: 0.8 },
+    }));
+
+    return {
+      backgroundColor: '#1a1a2e',
+      animation: false,
+      grid: [
+        { left: '10%', right: '2%', top: '3%', height: '60%' },
+        { left: '10%', right: '2%', top: '70%', height: '18%' },
+      ],
+      xAxis: [
+        {
+          type: 'category', data: dates, gridIndex: 0,
+          axisLine: { lineStyle: { color: '#333' } },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
+        {
+          type: 'category', data: dates, gridIndex: 1,
+          axisLine: { lineStyle: { color: '#333' } },
+          axisTick: { show: false },
+          axisLabel: { color: '#888', fontSize: 10, interval: Math.floor(kline.length / 5) },
+          splitLine: { show: false },
+        },
+      ],
+      yAxis: [
+        {
+          type: 'value', gridIndex: 0, scale: true,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: '#888', fontSize: 10 },
+          splitLine: { lineStyle: { color: '#222' } },
+          position: 'left',
+        },
+        {
+          type: 'value', gridIndex: 1, scale: true,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
+      ],
+      dataZoom: [{
+        type: 'slider', xAxisIndex: [0, 1],
+        start: 0, end: 100,
+        height: 20, bottom: 0,
+        borderColor: '#333',
+        backgroundColor: '#1a1a2e',
+        dataBackground: {
+          lineStyle: { color: '#444' },
+          areaStyle: { color: '#333' },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: '#666' },
+          areaStyle: { color: '#444' },
+        },
+        handleStyle: { color: '#888' },
+        textStyle: { color: '#888' },
+        fillerColor: 'rgba(255,255,255,0.05)',
+      }],
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross', crossStyle: { color: '#666' } },
+        backgroundColor: 'rgba(30,30,50,0.95)',
+        borderColor: '#444',
+        textStyle: { color: '#ccc', fontSize: 12 },
+        formatter: (params: any) => {
+          if (!params || params.length === 0) return '';
+          const date = params[0].axisValue;
+          const k = kline.find((d: any) => d.date === date);
+          if (!k) return '';
+          const color = k.close >= k.open ? '#ef4444' : '#22c55e';
+          let s = `<div style="font-size:13px;font-weight:bold;margin-bottom:4px">${date}</div>`;
+          s += `<div>开: <span style="color:#fff">${k.open.toFixed(2)}</span> 高: <span style="color:#ef4444">${k.high.toFixed(2)}</span> 低: <span style="color:#22c55e">${k.low.toFixed(2)}</span> 收: <span style="color:${color}">${k.close.toFixed(2)}</span></div>`;
+          s += `<div>涨幅: <span style="color:${color}">${k.open > 0 ? ((k.close - k.open) / k.open * 100).toFixed(2) : 0}%</span> 成交量: ${(k.volume / 10000).toFixed(0)}万手</div>`;
+          params.forEach((p: any) => {
+            if (p.seriesName?.startsWith('MA')) {
+              s += `<div style="color:${p.color}">${p.seriesName}: ${p.value?.toFixed(2) || '-'}</div>`;
+            }
+          });
+          return s;
+        },
+      },
+      series: [
+        {
+          name: 'K线', type: 'candlestick', data: values,
+          xAxisIndex: 0, yAxisIndex: 0,
+          itemStyle: {
+            color: '#ef4444', color0: '#22c55e',
+            borderColor: '#ef4444', borderColor0: '#22c55e',
+          },
+        },
+        ...maSeries,
+        {
+          name: '成交量', type: 'bar', data: kline.map((k: any, i: number) => ({
+            value: k.volume,
+            itemStyle: {
+              color: k.close >= k.open ? '#ef4444' : '#22c55e',
+              opacity: 0.5,
+            },
+          })),
+          xAxisIndex: 1, yAxisIndex: 1,
+        },
+      ],
+    };
+  };
+
+  // 同花顺风格分时图配置
   const getIntradayOption = () => {
     const points = intradayData?.points || [];
     if (points.length === 0) return {};
@@ -130,52 +274,149 @@ const Backtest: React.FC = () => {
     const prices = points.map((p: any) => p.price);
     const volumes = points.map((p: any) => p.volume);
     const changes = points.map((p: any) => p.changePercent);
-    const color = (intradayData?.qtInfo?.changePercent || 0) >= 0 ? '#ef4444' : '#22c55e';
-    const priceMin = Math.min(...prices);
-    const priceMax = Math.max(...prices);
-    const pricePad = (priceMax - priceMin) * 0.3 || 1;
+    const changePct = intradayData?.qtInfo?.changePercent || 0;
+    const color = changePct >= 0 ? '#ef4444' : '#22c55e';
+
+    // 价格范围：以昨收为基准，上下扩展当日振幅
+    const allPrices = [...prices, preClose];
+    const priceMin = Math.min(...allPrices);
+    const priceMax = Math.max(...allPrices);
+    const priceRange = priceMax - priceMin;
+    // 振幅小于0.5%时用最小范围，否则留2%边距
+    const pad = Math.max(priceRange * 0.02, preClose * 0.002);
+    const yMin = priceMin - pad;
+    const yMax = priceMax + pad;
+
+    // 涨跌幅范围
+    const changeMin = Math.min(...changes, 0);
+    const changeMax = Math.max(...changes, 0);
+    const changePad = Math.max((changeMax - changeMin) * 0.1, 0.1);
+
+    // 时间轴标签：只显示整半小时
+    const labelInterval = Math.max(1, Math.floor(times.length / 8));
+    const timeLabels = times.map((t: string, i: number) => {
+      if (i === 0 || i === times.length - 1) return t;
+      if (i % labelInterval === 0) {
+        const [h, m] = t.split(':').map(Number);
+        if (m === 0 || m === 30) return t;
+        return '';
+      }
+      return '';
+    });
 
     return {
+      backgroundColor: '#1a1a2e',
+      animation: false,
       grid: [
-        { left: '8%', right: '3%', top: '5%', height: '70%' },
-        { left: '8%', right: '3%', top: '80%', height: '15%' },
+        { left: '10%', right: '10%', top: '3%', height: '60%' },
+        { left: '10%', right: '10%', top: '70%', height: '18%' },
       ],
       xAxis: [
-        { type: 'category', data: times, gridIndex: 0, show: false },
-        { type: 'category', data: times, gridIndex: 1, show: false },
+        {
+          type: 'category', data: times, gridIndex: 0,
+          axisLine: { lineStyle: { color: '#333' } },
+          axisTick: { show: false },
+          axisLabel: { color: '#888', fontSize: 10, interval: labelInterval, formatter: (v: string) => v },
+          splitLine: { show: false },
+        },
+        {
+          type: 'category', data: times, gridIndex: 1,
+          axisLine: { lineStyle: { color: '#333' } },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
       ],
       yAxis: [
-        { type: 'value', gridIndex: 0, min: priceMin - pricePad, max: priceMax + pricePad, splitLine: { lineStyle: { color: '#f1f5f9' } }, axisLabel: { fontSize: 10, color: '#94a3b8' } },
-        { type: 'value', gridIndex: 1, show: false },
+        {
+          type: 'value', gridIndex: 0,
+          min: yMin, max: yMax,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: '#888', fontSize: 10, formatter: (v: number) => v.toFixed(2) },
+          splitLine: { lineStyle: { color: '#222' } },
+          position: 'left',
+        },
+        {
+          type: 'value', gridIndex: 0,
+          min: changeMin - changePad, max: changeMax + changePad,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { color: '#888', fontSize: 10, formatter: (v: number) => v.toFixed(2) + '%' },
+          splitLine: { show: false },
+          position: 'right',
+        },
+        {
+          type: 'value', gridIndex: 1,
+          axisLine: { show: false },
+          axisTick: { show: false },
+          axisLabel: { show: false },
+          splitLine: { show: false },
+        },
       ],
+      tooltip: {
+        trigger: 'axis',
+        backgroundColor: 'rgba(30,30,50,0.95)',
+        borderColor: '#444',
+        textStyle: { color: '#ccc', fontSize: 12 },
+        formatter: (params: any) => {
+          if (!params || params.length < 2) return '';
+          const t = params[0].axisValue;
+          const price = params[0].value;
+          const chg = params[1].value;
+          return `<div style="font-size:13px;font-weight:bold;margin-bottom:4px">${t}</div>
+            <div>价格: <span style="color:${color}">${price?.toFixed(2)}</span></div>
+            <div>涨跌幅: <span style="color:${color}">${chg?.toFixed(2)}%</span></div>`;
+        },
+      },
       series: [
-        { name: '价格', type: 'line', data: prices, smooth: true, xAxisIndex: 0, yAxisIndex: 0, lineStyle: { width: 1.5, color }, areaStyle: { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: color + '30' }, { offset: 1, color: color + '05' }] } }, symbol: 'none', markLine: { silent: true, data: [{ yAxis: preClose, lineStyle: { color: '#94a3b8', type: 'dashed', width: 1 } }] } },
-        { name: '成交量', type: 'bar', data: volumes, xAxisIndex: 1, yAxisIndex: 1, itemStyle: { color: color + '40' } },
+        {
+          name: '价格', type: 'line', data: prices, smooth: true,
+          xAxisIndex: 0, yAxisIndex: 0,
+          lineStyle: { width: 1.5, color },
+          areaStyle: {
+            color: {
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: color + '30' },
+                { offset: 1, color: color + '03' },
+              ],
+            },
+          },
+          symbol: 'none',
+          markLine: {
+            silent: true, symbol: 'none',
+            data: [{ yAxis: preClose, lineStyle: { color: '#ffcc00', type: 'solid', width: 1, opacity: 0.5 } }],
+            label: { show: false },
+          },
+        },
+        {
+          name: '涨跌幅', type: 'line', data: changes, smooth: true,
+          xAxisIndex: 0, yAxisIndex: 1,
+          lineStyle: { width: 0.5, color },
+          areaStyle: {
+            color: {
+              type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: color + '15' },
+                { offset: 1, color: 'transparent' },
+              ],
+            },
+          },
+          symbol: 'none',
+          show: false,
+        },
+        {
+          name: '成交量', type: 'bar', data: volumes.map((v: number, i: number) => ({
+            value: v,
+            itemStyle: {
+              color: changes[i] >= 0 ? '#ef4444' : '#22c55e',
+              opacity: 0.4,
+            },
+          })),
+          xAxisIndex: 1, yAxisIndex: 2,
+        },
       ],
-    };
-  };
-
-  // K线迷你图配置
-  const getMiniKlineOption = () => {
-    const kline = stockOverview?.kline || [];
-    if (kline.length === 0) return {};
-    const dates = kline.map((k: any) => k.date);
-    const values = kline.map((k: any) => [k.open, k.close, k.low, k.high]);
-    const ma5: (number | null)[] = [];
-    for (let i = 0; i < kline.length; i++) {
-      if (i < 4) { ma5.push(null); continue; }
-      let sum = 0;
-      for (let j = i - 4; j <= i; j++) sum += kline[j].close;
-      ma5.push(+(sum / 5).toFixed(2));
-    }
-    return {
-      grid: { left: '8%', right: '3%', top: '5%', bottom: '5%' },
-      xAxis: { type: 'category', data: dates, show: false },
-      yAxis: { type: 'value', show: true, splitLine: { lineStyle: { color: '#f1f5f9' } }, scale: true, axisLabel: { fontSize: 10, color: '#94a3b8' } },
-      series: [
-        { name: 'K线', type: 'candlestick', data: values, itemStyle: { color: '#ef4444', color0: '#22c55e', borderColor: '#ef4444', borderColor0: '#22c55e' } },
-        { name: 'MA5', type: 'line', data: ma5, smooth: true, lineStyle: { width: 1, color: '#f59e0b' }, symbol: 'none' }
-      ]
     };
   };
 
@@ -288,13 +529,13 @@ const Backtest: React.FC = () => {
                         </div>
                       </div>
                       {chartMode === 'kline' ? (
-                        <ReactECharts option={getMiniKlineOption()} style={{ height: '180px' }} />
+                        <ReactECharts key="kline" option={getMiniKlineOption()} style={{ height: '320px' }} />
                       ) : intradayLoading ? (
-                        <div className="flex items-center justify-center h-[180px] text-sm text-slate-400">加载分时图...</div>
+                        <div className="flex items-center justify-center h-[220px] text-sm text-slate-400">加载分时图...</div>
                       ) : intradayData?.points?.length ? (
-                        <ReactECharts option={getIntradayOption()} style={{ height: '220px' }} />
+                        <ReactECharts key="intraday" option={getIntradayOption()} style={{ height: '280px' }} />
                       ) : (
-                        <div className="flex items-center justify-center h-[180px] text-sm text-slate-400">暂无分时数据（非交易时段）</div>
+                        <div className="flex items-center justify-center h-[220px] text-sm text-slate-400">暂无分时数据（非交易时段）</div>
                       )}
                     </div>
                   )}
