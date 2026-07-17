@@ -454,10 +454,23 @@ export const realDataSource: DataSource = {
         } catch {}
       }
 
+      // 模糊匹配：关键字所有字符按顺序出现在目标中即匹配
+      const fuzzyMatch = (kw: string, target: string): boolean => {
+        if (!kw || !target) return false;
+        const lowerK = kw.toLowerCase();
+        const lowerT = target.toLowerCase();
+        if (lowerT.includes(lowerK)) return true;
+        let ki = 0;
+        for (let ti = 0; ti < lowerT.length && ki < lowerK.length; ti++) {
+          if (lowerT[ti] === lowerK[ki]) ki++;
+        }
+        return ki === lowerK.length;
+      };
+
       // 2. 优先从本地缓存搜索（最快，无网络开销）
       if (stockNameCache.length > 0) {
         const cached = stockNameCache.filter(s =>
-          s.code.includes(k) || s.name.includes(k) || s.industry.includes(k)
+          fuzzyMatch(k, s.code) || fuzzyMatch(k, s.name) || (s.industry && fuzzyMatch(k, s.industry))
         ).slice(0, 20);
         if (cached.length > 0) {
           // 从行情缓存获取实时市值/PE/PB
@@ -482,7 +495,7 @@ export const realDataSource: DataSource = {
       try {
         const rows = await fetchClist(1, 500, 'f6', 0);
         const filtered = rows.filter(r =>
-          String(r.f12).includes(k) || String(r.f14).includes(k)
+          fuzzyMatch(k, String(r.f12)) || fuzzyMatch(k, String(r.f14))
         );
         if (filtered.length > 0) {
           return filtered.slice(0, 20).map(parseClistToStockInfo);

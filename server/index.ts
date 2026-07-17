@@ -7,6 +7,7 @@ import { stockRoutes } from './routes/stock';
 import { strategyRoutes } from './routes/strategy';
 import { selectionRoutes } from './routes/selection';
 import { backtestRoutes } from './routes/backtest';
+import { nlStrategyRoutes } from './routes/nl-strategy';
 
 const app = express();
 
@@ -42,6 +43,7 @@ app.use('/api/stock', stockRoutes);
 app.use('/api/strategy', strategyRoutes);
 app.use('/api/selection', selectionRoutes);
 app.use('/api/backtest', backtestRoutes);
+app.use('/api/nl-strategy', nlStrategyRoutes);
 
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Server error:', err);

@@ -32,26 +32,36 @@ const PerformanceCard: React.FC<{
 );
 
 const StockSearcher: React.FC<{ onSelect: (stock: Stock) => void }> = ({ onSelect }) => {
-  const { stocks: storeStocks } = useAppStore();
+  const storeStocks = useAppStore((s) => s.stocks);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<Stock[]>([]);
   const [searching, setSearching] = useState(false);
 
   const doSearch = useCallback(async (term: string) => {
     if (!term.trim()) { setSearchResults(storeStocks.slice(0, 10)); return; }
+    const fuzzyMatch = (kw: string, t: string) => {
+      if (!kw || !t) return false;
+      const lk = kw.toLowerCase(), lt = t.toLowerCase();
+      if (lt.includes(lk)) return true;
+      let ki = 0;
+      for (let ti = 0; ti < lt.length && ki < lk.length; ti++) {
+        if (lt[ti] === lk[ki]) ki++;
+      }
+      return ki === lk.length;
+    };
     setSearching(true);
     try {
       const results = await searchStocks(term);
       let final = results.slice(0, 10);
       if (final.length === 0) {
-        final = storeStocks.filter(s => s.code.includes(term) || s.name.includes(term)).slice(0, 10);
+        final = storeStocks.filter(s => fuzzyMatch(term, s.code) || fuzzyMatch(term, s.name)).slice(0, 10);
       }
       if (final.length === 0 && /^\d{6}$/.test(term.trim())) {
         final = [{ code: term.trim(), name: term.trim(), industry: '未分类', market: term.trim().startsWith('6') ? 'SH' : 'SZ', marketCap: 0, pe: 0, pb: 0, roe: 0 }];
       }
       setSearchResults(final);
     } catch {
-      setSearchResults(storeStocks.filter(s => s.code.includes(term) || s.name.includes(term)).slice(0, 10));
+      setSearchResults(storeStocks.filter(s => fuzzyMatch(term, s.code) || fuzzyMatch(term, s.name)).slice(0, 10));
     } finally { setSearching(false); }
   }, [storeStocks]);
 
@@ -77,7 +87,17 @@ const StockSearcher: React.FC<{ onSelect: (stock: Stock) => void }> = ({ onSelec
 };
 
 const Backtest: React.FC = () => {
-  const { stocks, strategies, myStrategies, selectedStock, selectedStrategy, currentBacktestResult, loading, setSelectedStock, setSelectedStrategy, runBacktestAction, fetchInitialData } = useAppStore();
+  const stocks = useAppStore((s) => s.stocks);
+  const strategies = useAppStore((s) => s.strategies);
+  const myStrategies = useAppStore((s) => s.myStrategies);
+  const selectedStock = useAppStore((s) => s.selectedStock);
+  const selectedStrategy = useAppStore((s) => s.selectedStrategy);
+  const currentBacktestResult = useAppStore((s) => s.currentBacktestResult);
+  const loading = useAppStore((s) => s.loading);
+  const setSelectedStock = useAppStore((s) => s.setSelectedStock);
+  const setSelectedStrategy = useAppStore((s) => s.setSelectedStrategy);
+  const runBacktestAction = useAppStore((s) => s.runBacktestAction);
+  const fetchInitialData = useAppStore((s) => s.fetchInitialData);
   const allStrategies = [...strategies, ...myStrategies.filter(ms => !strategies.find(s => s.id === ms.id))];
   const [dateRange, setDateRange] = useState({ startDate: '2024-01-01', endDate: '2024-05-23' });
   const [initialCapital, setInitialCapital] = useState(100000);
@@ -522,30 +542,47 @@ const Backtest: React.FC = () => {
                       ) : intradayData?.points?.length ? (
                         <>
                           <ReactECharts key="intraday" option={getIntradayOption()} style={{ height: '280px' }} />
-                          {intradayData?.depth && (
+                          {intradayData?.depth && (() => {
+                            const fmtAmt = (price: number, vol: number) => {
+                              if (!price || !vol) return '-';
+                              const amt = price * vol * 100; // 手→股→金额(元)
+                              if (amt >= 1e8) return (amt / 1e8).toFixed(2) + '亿';
+                              if (amt >= 1e4) return (amt / 1e4).toFixed(0) + '万';
+                              return amt.toFixed(0);
+                            };
+                            return (
                             <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                               <div className="border border-slate-200 rounded overflow-hidden">
                                 <div className="bg-green-50 text-green-700 font-medium px-2 py-1 text-center border-b border-green-200">买盘</div>
-                                {intradayData.depth.buy?.map((item: any, i: number) => (
-                                  <div key={i} className="flex justify-between px-2 py-0.5 border-b border-slate-100 last:border-b-0">
-                                    <span className="text-slate-500">买{i + 1}</span>
-                                    <span className="text-green-600 font-medium">{item.price > 0 ? item.price.toFixed(2) : '-'}</span>
-                                    <span className="text-slate-400">{item.volume > 0 ? (item.volume / 100).toFixed(0) : '-'}</span>
-                                  </div>
-                                ))}
+                                <table className="w-full">
+                                  <tbody>
+                                    {intradayData.depth.buy?.map((item: any, i: number) => (
+                                      <tr key={i} className="border-b border-slate-100 last:border-b-0">
+                                        <td className="pl-2 py-0.5 text-slate-500 w-8">买{i + 1}</td>
+                                        <td className="text-right pr-2 py-0.5 text-green-600 font-medium font-mono">{item.price > 0 ? item.price.toFixed(2) : '-'}</td>
+                                        <td className="text-right pr-2 py-0.5 text-slate-400">{fmtAmt(item.price, item.volume)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                               <div className="border border-slate-200 rounded overflow-hidden">
                                 <div className="bg-red-50 text-red-700 font-medium px-2 py-1 text-center border-b border-red-200">卖盘</div>
-                                {[...(intradayData.depth.sell || [])].reverse().map((item: any, i: number) => (
-                                  <div key={i} className="flex justify-between px-2 py-0.5 border-b border-slate-100 last:border-b-0">
-                                    <span className="text-slate-500">卖{5 - i}</span>
-                                    <span className="text-red-600 font-medium">{item.price > 0 ? item.price.toFixed(2) : '-'}</span>
-                                    <span className="text-slate-400">{item.volume > 0 ? (item.volume / 100).toFixed(0) : '-'}</span>
-                                  </div>
-                                ))}
+                                <table className="w-full">
+                                  <tbody>
+                                    {[...(intradayData.depth.sell || [])].reverse().map((item: any, i: number) => (
+                                      <tr key={i} className="border-b border-slate-100 last:border-b-0">
+                                        <td className="pl-2 py-0.5 text-slate-500 w-8">卖{5 - i}</td>
+                                        <td className="text-right pr-2 py-0.5 text-red-600 font-medium font-mono">{item.price > 0 ? item.price.toFixed(2) : '-'}</td>
+                                        <td className="text-right pr-2 py-0.5 text-slate-400">{fmtAmt(item.price, item.volume)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
-                          )}
+                            );
+                          })()}
                         </>
                       ) : (
                         <div className="flex items-center justify-center h-[220px] text-sm text-slate-400">暂无分时数据（非交易时段）</div>

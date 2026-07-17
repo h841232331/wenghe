@@ -1,21 +1,25 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Eye, Share2, Copy, Save, X, Info, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Plus, Edit2, Trash2, Eye, Share2, Copy, Save, X, Info, HelpCircle, Wand2, Loader2 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Strategy as StrategyType, StrategyFactor, StrategyFilter } from '@/types';
-import { getFactorLibrary, getFilterFields, saveStrategy, updateStrategy, deleteStrategy } from '@/api';
+import { getFactorLibrary, getFilterFields, saveStrategy, updateStrategy, deleteStrategy, parseNLStrategy } from '@/api';
 
-const typeColors = {
+const typeColors: Record<string, string> = {
   factor: 'bg-blue-100 text-blue-700',
   technical: 'bg-purple-100 text-purple-700',
   fundamental: 'bg-green-100 text-green-700',
   mixed: 'bg-amber-100 text-amber-700',
+  custom: 'bg-rose-100 text-rose-700',
+  preset: 'bg-slate-100 text-slate-600',
 };
 
-const typeLabels = {
+const typeLabels: Record<string, string> = {
   factor: '多因子',
   technical: '技术指标',
   fundamental: '基本面',
   mixed: '混合策略',
+  custom: 'NL解析',
+  preset: '系统预设',
 };
 
 const FactorLibraryModal: React.FC<{
@@ -154,12 +158,33 @@ const StrategyDetailCard: React.FC<{
         <div className="flex flex-wrap gap-2">
           {strategy.filters.map((filter, index) => {
             const fieldInfo = getFilterFields().find(f => f.key === filter.field);
-            const opLabels: Record<string, string> = { gt: '大于', lt: '小于', eq: '等于', between: '区间' };
+            const opLabels: Record<string, string> = { gt: '大于', lt: '小于', gte: '大于等于', lte: '小于等于', eq: '等于', ne: '排除', between: '区间' };
+
+            // 特殊处理布尔类型筛选
+            if (fieldInfo?.type === 'boolean') {
+              const isTrue = filter.value === 'true';
+              const label = filter.label || fieldInfo?.label || filter.field;
+              // 排除类字段（isST, isNewStock, isSuspended）用红色/灰色
+              const isExclude = filter.field.startsWith('isST') || filter.field.startsWith('isNew') || filter.field.startsWith('isSuspended');
+              if (isExclude) {
+                return (
+                  <div key={index} className={`text-xs px-2 py-1 rounded border ${isTrue ? 'bg-red-50 text-red-700 border-red-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
+                    {isTrue ? label : `${label.replace('排除', '不排除')}`}
+                  </div>
+                );
+              }
+              return (
+                <div key={index} className={`text-xs px-2 py-1 rounded border ${isTrue ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}>
+                  {isTrue ? label : `不${label}`}
+                </div>
+              );
+            }
+
             return (
               <div key={index} className="text-xs text-slate-600 bg-slate-50 px-2 py-1 rounded">
-                {fieldInfo?.label || filter.field} {opLabels[filter.operator] || filter.operator}{' '}
+                {filter.label || fieldInfo?.label || filter.field} {opLabels[filter.operator] || filter.operator}{' '}
                 {Array.isArray(filter.value) ? `${filter.value[0]}~${filter.value[1]}` : filter.value}
-                {fieldInfo?.unit || ''}
+                {filter.unit || fieldInfo?.unit || ''}
               </div>
             );
           })}
@@ -200,6 +225,84 @@ const StrategyDetailCard: React.FC<{
   );
 };
 
+// 可搜索下拉选择组件
+const SearchableSelect: React.FC<{
+  options: { key: string; label: string }[];
+  value: string;
+  onChange: (key: string) => void;
+  className?: string;
+}> = ({ options, value, onChange, className = '' }) => {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selected = options.find(o => o.key === value);
+  const filtered = search
+    ? options.filter(o => o.label.includes(search) || o.key.toLowerCase().includes(search.toLowerCase()))
+    : options;
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  useEffect(() => {
+    if (open) {
+      setSearch('');
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [open]);
+
+  return (
+    <div ref={ref} className={`relative ${className}`} style={{ minWidth: 160 }}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm text-left bg-white hover:border-amber-400 focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none transition-colors flex items-center justify-between gap-2"
+      >
+        <span className={selected ? 'text-slate-700' : 'text-slate-400'}>{selected?.label || '请选择条件'}</span>
+        <svg className="w-4 h-4 text-slate-400 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute z-50 mt-1 w-72 bg-white border border-slate-200 rounded-lg shadow-lg">
+          <div className="p-2 border-b border-slate-100">
+            <input
+              ref={inputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索条件..."
+              className="w-full px-2 py-1.5 text-sm border border-slate-200 rounded-md focus:border-amber-400 focus:ring-1 focus:ring-amber-400/20 outline-none"
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-sm text-slate-400 text-center">无匹配条件</div>
+            ) : (
+              filtered.map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => { onChange(opt.key); setOpen(false); }}
+                  className={`w-full px-3 py-2 text-sm text-left hover:bg-amber-50 transition-colors ${opt.key === value ? 'bg-amber-50 text-amber-700 font-medium' : 'text-slate-600'}`}
+                >
+                  {opt.label}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const StrategyEditor: React.FC<{
   strategy: StrategyType | null;
   onSave: (strategy: StrategyType) => void;
@@ -215,26 +318,27 @@ const StrategyEditor: React.FC<{
 
   const filterFields = getFilterFields();
 
+  // 扩展字段列表：把当前策略中不在标准库里的字段也加入下拉
+  const extendedFilterFields = useMemo(() => {
+    const customFields = filters
+      .filter(f => !filterFields.find(ff => ff.key === f.field))
+      .map(f => ({ key: f.field, label: f.label || f.field, unit: f.unit || '', type: 'number' as const, category: '自定义' }));
+    return [...filterFields, ...customFields];
+  }, [filters]);
+
   const handleSave = () => {
     if (!name.trim()) return;
-
     const newStrategy: StrategyType = {
       id: strategy?.id || `strategy-${Date.now()}`,
-      name,
-      type,
-      description,
-      factors,
-      filters,
-      isPublic,
+      name, type, description, factors, filters, isPublic,
       createdAt: strategy?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-
     onSave(newStrategy);
   };
 
   const addFactorFromLibrary = (factor: { name: string; weight: number }) => {
-    setFactors([...factors, { id: factor.name, field: factor.name, label: factor.name, name: factor.name, weight: factor.weight, direction: "asc" as const, params: {} }]);
+    setFactors([...factors, { id: String(Date.now()), field: factor.name, label: factor.name, name: factor.name, weight: factor.weight, direction: "asc" as const, params: {} }]);
   };
 
   const updateFactor = (index: number, key: keyof StrategyFactor, value: any) => {
@@ -243,12 +347,10 @@ const StrategyEditor: React.FC<{
     setFactors(newFactors);
   };
 
-  const removeFactor = (index: number) => {
-    setFactors(factors.filter((_, i) => i !== index));
-  };
+  const removeFactor = (index: number) => { setFactors(factors.filter((_, i) => i !== index)); };
 
   const addFilter = () => {
-    setFilters([...filters, { field: 'pe', label: '市盈率', operator: '小于', value: '20', value2: '', unit: '', id: String(Date.now()) }]);
+    setFilters([...filters, { field: 'pe', label: '市盈率', operator: 'lt', value: '20', value2: '', unit: '', id: String(Date.now()) }]);
   };
 
   const getDefaultValue = (field: string): number => {
@@ -269,7 +371,14 @@ const StrategyEditor: React.FC<{
 
   const handleFieldChange = (index: number, field: string) => {
     const newFilters = [...filters];
-    newFilters[index] = { ...newFilters[index], field, value: String(getDefaultValue(field)) };
+    const isBoolean = filterFields.find(f => f.key === field)?.type === 'boolean';
+    newFilters[index] = {
+      ...newFilters[index],
+      field,
+      operator: isBoolean ? 'eq' : 'gt',
+      value: isBoolean ? 'true' : String(getDefaultValue(field)),
+      unit: isBoolean ? '' : (filterFields.find(f => f.key === field)?.unit || ''),
+    };
     setFilters(newFilters);
   };
 
@@ -312,9 +421,12 @@ const StrategyEditor: React.FC<{
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
-          <h2 className="text-xl font-semibold text-slate-800">
-            {strategy ? '编辑策略' : '创建新策略'}
-          </h2>
+          <div>
+            <h2 className="text-xl font-semibold text-slate-800">
+              {strategy ? '编辑策略' : '创建新策略'}
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">策略定义了"选什么股票"的规则，回测时用这些规则筛选股票</p>
+          </div>
           <button
             onClick={onCancel}
             className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
@@ -344,11 +456,12 @@ const StrategyEditor: React.FC<{
                   onChange={(e) => setType(e.target.value as StrategyType['type'])}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all"
                 >
-                  <option value="factor">多因子策略</option>
-                  <option value="technical">技术指标策略</option>
-                  <option value="fundamental">基本面策略</option>
+                  <option value="factor">多因子（综合打分）</option>
+                  <option value="technical">技术指标（K线/均线）</option>
+                  <option value="fundamental">基本面（财务数据）</option>
                   <option value="mixed">混合策略</option>
                 </select>
+                <p className="text-xs text-slate-400 mt-1">选"多因子"即可，权重系统会自动分配。新手建议直接复制公开策略</p>
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-slate-600 mb-1">策略描述</label>
@@ -375,7 +488,7 @@ const StrategyEditor: React.FC<{
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
+            <h3 className="text-sm font-medium text-slate-700 mb-1 flex items-center gap-2">
               策略因子
               <button
                 onClick={() => setShowFactorLibrary(true)}
@@ -384,10 +497,8 @@ const StrategyEditor: React.FC<{
               >
                 <HelpCircle className="w-4 h-4" />
               </button>
-              <span className="text-xs text-slate-400 font-normal">
-                （共 {factors.length} 个因子，总权重 {(factors.reduce((sum, f) => sum + f.weight, 0) * 100).toFixed(0)}%）
-              </span>
             </h3>
+            <p className="text-xs text-slate-400 mb-3">因子是评分依据，如PE越低分越高。权重决定各因子在总分中的占比。新手可跳过，直接用筛选条件即可。</p>
             <div className="space-y-2">
               {factors.map((factor, index) => (
                 <div key={index} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl">
@@ -400,13 +511,12 @@ const StrategyEditor: React.FC<{
                   />
                   <div className="flex items-center gap-2">
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       value={factor.weight}
-                      onChange={(e) => updateFactor(index, 'weight', Number(e.target.value))}
+                      onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) updateFactor(index, 'weight', v); }}
                       className="w-20 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
-                      min="0"
-                      max="1"
-                      step="0.05"
+                      placeholder="0.1"
                     />
                     <span className="text-xs text-slate-500 w-8">权重</span>
                   </div>
@@ -444,62 +554,80 @@ const StrategyEditor: React.FC<{
             </h3>
             <div className="space-y-2">
               {filters.map((filter, index) => {
-                const fieldInfo = filterFields.find(f => f.key === filter.field);
+                const fieldInfo = extendedFilterFields.find(f => f.key === filter.field);
                 return (
                   <div key={index} className="flex items-center gap-2 p-3 bg-slate-50 rounded-xl flex-wrap">
-                    <select
+                    <SearchableSelect
+                      options={extendedFilterFields}
                       value={filter.field}
-                      onChange={(e) => handleFieldChange(index, e.target.value)}
-                      className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none bg-white min-w-[140px]"
-                    >
-                      {filterFields.map(field => (
-                        <option key={field.key} value={field.key}>{field.label}</option>
-                      ))}
-                    </select>
+                      onChange={(field) => handleFieldChange(index, field)}
+                    />
 
-                    <select
-                      value={filter.operator}
-                      onChange={(e) => handleOperatorChange(index, e.target.value as StrategyFilter['operator'])}
-                      className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none bg-white min-w-[100px]"
-                    >
-                      <option value="gt">大于</option>
-                      <option value="lt">小于</option>
-                      <option value="between">区间</option>
-                    </select>
-
-                    {filter.operator === 'between' ? (
-                      <div className="flex items-center gap-2 flex-1 min-w-[280px]">
-                        <div className="flex items-center gap-2 flex-1">
-                          <span className="text-xs text-slate-500 whitespace-nowrap">最小值:</span>
-                          <input
-                            type="number"
-                            value={(filter.value as unknown as [number, number])[0]}
-                            onChange={(e) => updateFilterValue(index, 'min', Number(e.target.value))}
-                            className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
-                          />
-                        </div>
-                        <span className="text-slate-400 font-medium">~</span>
-                        <div className="flex items-center gap-2 flex-1">
-                          <span className="text-xs text-slate-500 whitespace-nowrap">最大值:</span>
-                          <input
-                            type="number"
-                            value={(filter.value as unknown as [number, number])[1]}
-                            onChange={(e) => updateFilterValue(index, 'max', Number(e.target.value))}
-                            className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
-                          />
-                        </div>
-                        <span className="text-sm text-slate-500 whitespace-nowrap">{fieldInfo?.unit}</span>
-                      </div>
+                    {fieldInfo?.type === 'boolean' ? (
+                      <select
+                        value={String(filter.value)}
+                        onChange={(e) => updateFilter(index, 'value', e.target.value)}
+                        className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none bg-white min-w-[100px]"
+                      >
+                        <option value="true">是</option>
+                        <option value="false">否</option>
+                      </select>
                     ) : (
-                      <div className="flex items-center gap-2 flex-1 min-w-[150px]">
-                        <input
-                          type="number"
-                          value={filter.value as unknown as number}
-                          onChange={(e) => updateFilterValue(index, 'single', Number(e.target.value))}
-                          className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
-                        />
-                        <span className="text-sm text-slate-500 whitespace-nowrap">{fieldInfo?.unit}</span>
-                      </div>
+                      <>
+                        <select
+                          value={filter.operator}
+                          onChange={(e) => handleOperatorChange(index, e.target.value as StrategyFilter['operator'])}
+                          className="px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none bg-white min-w-[100px]"
+                        >
+                          <option value="gt">大于</option>
+                          <option value="lt">小于</option>
+                          <option value="gte">大于等于</option>
+                          <option value="lte">小于等于</option>
+                          <option value="eq">等于</option>
+                          <option value="between">区间</option>
+                        </select>
+
+                        {filter.operator === 'between' ? (
+                          <div className="flex items-center gap-2 flex-1 min-w-[280px]">
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="text-xs text-slate-500 whitespace-nowrap">最小值:</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={(filter.value as unknown as [number, number])[0]}
+                                onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) updateFilterValue(index, 'min', v); }}
+                                className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
+                                placeholder="最小值"
+                              />
+                            </div>
+                            <span className="text-slate-400 font-medium">~</span>
+                            <div className="flex items-center gap-2 flex-1">
+                              <span className="text-xs text-slate-500 whitespace-nowrap">最大值:</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={(filter.value as unknown as [number, number])[1]}
+                                onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) updateFilterValue(index, 'max', v); }}
+                                className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
+                                placeholder="最大值"
+                              />
+                            </div>
+                            <span className="text-sm text-slate-500 whitespace-nowrap">{fieldInfo?.unit}</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 flex-1 min-w-[150px]">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={filter.value as unknown as number}
+                              onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) updateFilterValue(index, 'single', v); }}
+                              className="flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-500/20 outline-none"
+                              placeholder="数值"
+                            />
+                            <span className="text-sm text-slate-500 whitespace-nowrap">{fieldInfo?.unit}</span>
+                          </div>
+                        )}
+                      </>
                     )}
 
                     <button
@@ -548,44 +676,117 @@ const StrategyEditor: React.FC<{
 };
 
 const Strategy: React.FC = () => {
-  const { myStrategies, strategies, addMyStrategy, updateMyStrategy, deleteMyStrategy, fetchInitialData } = useAppStore();
+  const boolFields = ['isST', 'isNewStock', 'isSuspended', 'isKCB', 'isCYB', 'isBJ', 'isHS300', 'isZZ500'];
+  const myStrategies = useAppStore((s) => s.myStrategies);
+  const strategies = useAppStore((s) => s.strategies);
+  const addMyStrategy = useAppStore((s) => s.addMyStrategy);
+  const updateMyStrategy = useAppStore((s) => s.updateMyStrategy);
+  const deleteMyStrategy = useAppStore((s) => s.deleteMyStrategy);
+  const fetchInitialData = useAppStore((s) => s.fetchInitialData);
   const [showEditor, setShowEditor] = useState(false);
   const [editingStrategy, setEditingStrategy] = useState<StrategyType | null>(null);
   const [showFactorLibrary, setShowFactorLibrary] = useState(false);
 
+  // NL策略解析
+  const [nlText, setNlText] = useState('');
+  const [nlParsing, setNlParsing] = useState(false);
+  const [nlResult, setNlResult] = useState<any>(null);
+  const [nlError, setNlError] = useState('');
+
   // 确保策略数据已加载
   useEffect(() => { fetchInitialData(); }, []);
+
+  const handleNLParse = async () => {
+    if (!nlText.trim()) return;
+    setNlParsing(true);
+    setNlError('');
+    setNlResult(null);
+    try {
+      const result = await parseNLStrategy(nlText.trim());
+      setNlResult(result);
+    } catch (e: any) {
+      setNlError(e?.message || '解析失败，请检查输入');
+    } finally {
+      setNlParsing(false);
+    }
+  };
+
+  const handleNLCreateStrategy = () => {
+    if (!nlResult) return;
+    // 分离布尔型筛选和非布尔型筛选
+    const boolFilters = (nlResult.filters || []).filter((f: any) => boolFields.includes(f.field));
+    const normalFilters = (nlResult.filters || []).filter((f: any) => !boolFields.includes(f.field));
+
+    const newStrategy: StrategyType = {
+      id: `nl-${Date.now()}`,
+      name: nlResult.name || 'NL策略',
+      description: nlResult.description || nlText,
+      type: 'custom',
+      factors: [],
+      filters: [
+        ...boolFilters.map((f: any) => ({
+          id: String(Date.now()) + '_' + f.field,
+          field: f.field,
+          label: f.label,
+          operator: (f.operator as string) || 'eq',
+          value: String(f.value || 'true'),
+          value2: '',
+          unit: '',
+        })),
+        ...normalFilters.map((f: any) => ({
+          id: String(Date.now()) + '_' + f.field,
+          field: f.field,
+          label: f.label,
+          operator: f.operator as string,
+          value: String(f.value),
+          value2: '',
+          unit: f.unit,
+        })),
+      ],
+      isPublic: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    addMyStrategy(newStrategy);
+    try { saveStrategy(newStrategy); } catch {}
+    setNlText('');
+    setNlResult(null);
+  };
 
   const handleCreateNew = () => {
     setEditingStrategy(null);
     setShowEditor(true);
   };
 
-  const handleEdit = (strategy: StrategyType) => {
+  const handleEdit = useCallback((strategy: StrategyType) => {
     setEditingStrategy(strategy);
     setShowEditor(true);
-  };
+  }, []);
 
-  const handleDuplicate = async (strategy: StrategyType) => {
+  const handleDuplicate = useCallback(async (strategy: StrategyType) => {
     const newStrategy: StrategyType = {
       ...strategy,
       id: `user-${Date.now()}`,
       name: `${strategy.name} (副本)`,
+      isPublic: false, // 复制的策略默认不公开
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     addMyStrategy(newStrategy);
     // 同步到服务端
     try { await saveStrategy(newStrategy); } catch {}
-  };
+  }, [addMyStrategy]);
 
-  const handleDelete = async (strategyId: string) => {
+  const handleDelete = useCallback(async (strategyId: string) => {
+    // 检查策略是否存在
+    const exists = myStrategies.some(s => s.id === strategyId);
+    if (!exists) return;
     if (window.confirm('确定要删除这个策略吗？')) {
       deleteMyStrategy(strategyId);
       // 同步到服务端
       try { await deleteStrategy(strategyId); } catch {}
     }
-  };
+  }, [myStrategies, deleteMyStrategy]);
 
   const handleSave = async (strategy: StrategyType) => {
     if (editingStrategy) {
@@ -626,6 +827,69 @@ const Strategy: React.FC = () => {
           <Plus className="w-4 h-4" />
           创建策略
         </button>
+      </div>
+
+      {/* 大白话策略输入 */}
+      <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-200 p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Wand2 className="w-5 h-5 text-amber-600" />
+          <h3 className="font-semibold text-amber-900">大白话创建策略</h3>
+          <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded">新手友好</span>
+        </div>
+        <div className="flex gap-3">
+          <div className="flex-1">
+            <textarea
+              value={nlText}
+              onChange={e => setNlText(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleNLParse(); } }}
+              placeholder={`用大白话描述你的策略，例如：
+• 5日均线上穿20日均线买入，PE小于20，ROE大于15
+• 20日内涨停>=3次，排除ST股，排除换手率低于5%
+• 10日线金叉30日线，市值大于100亿`}
+              rows={3}
+              className="w-full px-4 py-2.5 rounded-lg border border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none text-sm resize-none"
+            />
+            {nlError && <p className="text-xs text-red-500 mt-1">{nlError}</p>}
+          </div>
+          <button
+            onClick={handleNLParse}
+            disabled={nlParsing || !nlText.trim()}
+            className="px-4 py-2.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 whitespace-nowrap"
+          >
+            {nlParsing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+            {nlParsing ? '解析中...' : '解析'}
+          </button>
+        </div>
+        {nlResult && (
+          <div className="mt-3 p-3 bg-white rounded-lg border border-amber-200">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <span className="font-medium text-sm">{nlResult.name}</span>
+                <span className="text-xs text-slate-400 ml-2">{nlResult.description}</span>
+              </div>
+              <button
+                onClick={handleNLCreateStrategy}
+                className="px-3 py-1 bg-amber-500 text-white text-xs rounded hover:bg-amber-600 transition-colors"
+              >
+                创建策略
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1 text-xs">
+              {nlResult.buyConditions?.map((c: any, i: number) => (
+                <span key={i} className="px-2 py-0.5 bg-green-50 text-green-700 rounded border border-green-200">买入: {c.desc}</span>
+              ))}
+              {nlResult.sellConditions?.map((c: any, i: number) => (
+                <span key={i} className="px-2 py-0.5 bg-red-50 text-red-700 rounded border border-red-200">卖出: {c.desc}</span>
+              ))}
+              {nlResult.filters?.filter((f: any) => boolFields.includes(f.field)).map((f: any, i: number) => (
+                <span key={'bool' + i} className={`px-2 py-0.5 rounded border text-xs ${f.field === 'isST' || f.field === 'isNewStock' || f.field === 'isSuspended' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'}`}>{f.label}</span>
+              ))}
+              {nlResult.filters?.filter((f: any) => !boolFields.includes(f.field)).map((f: any, i: number) => (
+                <span key={i} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">{f.label}{f.operator === 'gt' ? '大于' : f.operator === 'lt' ? '小于' : f.operator === 'gte' ? '大于等于' : f.operator === 'lte' ? '小于等于' : f.operator === 'ne' ? '排除' : f.operator}{f.value}{f.unit}</span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div>

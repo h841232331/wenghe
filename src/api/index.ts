@@ -50,10 +50,20 @@ export async function searchStocks(keyword: string): Promise<Stock[]> {
     return realApi.searchStocks(keyword);
   }
   await delay(200);
+  const fuzzyMatch = (kw: string, t: string) => {
+    if (!kw || !t) return false;
+    const lk = kw.toLowerCase(), lt = t.toLowerCase();
+    if (lt.includes(lk)) return true;
+    let ki = 0;
+    for (let ti = 0; ti < lt.length && ki < lk.length; ti++) {
+      if (lt[ti] === lk[ki]) ki++;
+    }
+    return ki === lk.length;
+  };
   return mockStocks.filter(stock => 
-    stock.code.includes(keyword) || 
-    stock.name.includes(keyword) ||
-    stock.industry.includes(keyword)
+    fuzzyMatch(keyword, stock.code) || 
+    fuzzyMatch(keyword, stock.name) ||
+    fuzzyMatch(keyword, stock.industry)
   );
 }
 
@@ -482,16 +492,20 @@ export const getFilterFields = () => [
   { key: 'amount', label: '成交额', unit: '万', type: 'number', category: '市场' },
   { key: 'amplitude', label: '振幅', unit: '%', type: 'number', category: '市场' },
   { key: 'volumeRatio', label: '量比', unit: '倍', type: 'number', category: '技术' },
-  { key: 'ma5', label: '5日均线', unit: '元', type: 'number', category: '技术' },
-  { key: 'ma10', label: '10日均线', unit: '元', type: 'number', category: '技术' },
-  { key: 'ma20', label: '20日均线', unit: '元', type: 'number', category: '技术' },
-  { key: 'ma60', label: '60日均线', unit: '元', type: 'number', category: '技术' },
   { key: 'rsi', label: 'RSI(14)', unit: '(0-100)', type: 'number', category: '技术' },
   { key: 'macd', label: 'MACD', unit: '', type: 'number', category: '技术' },
   { key: 'kdj_k', label: 'KDJ-K值', unit: '(0-100)', type: 'number', category: '技术' },
   { key: 'kdj_d', label: 'KDJ-D值', unit: '(0-100)', type: 'number', category: '技术' },
   { key: 'boll_upper', label: '布林带上轨', unit: '元', type: 'number', category: '技术' },
   { key: 'boll_lower', label: '布林带下轨', unit: '元', type: 'number', category: '技术' },
+  { key: 'isST', label: '排除ST股', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isNewStock', label: '排除次新股', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isSuspended', label: '排除停牌股', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isKCB', label: '属于科创板', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isCYB', label: '属于创业板', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isBJ', label: '属于北交所', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isHS300', label: '属于沪深300', unit: '', type: 'boolean', category: '特征' },
+  { key: 'isZZ500', label: '属于中证500', unit: '', type: 'boolean', category: '特征' },
 ];
 
 /**
@@ -567,4 +581,21 @@ export async function fetchIntraday(code: string): Promise<{
   }
   await delay(200);
   return { date: '', qtInfo: null, points: [], depth: null };
+}
+
+/**
+ * 大白话解析策略
+ */
+export async function parseNLStrategy(text: string): Promise<{
+  name: string;
+  description: string;
+  buyConditions: { type: string; params: Record<string, number>; desc: string }[];
+  sellConditions: { type: string; params: Record<string, number>; desc: string }[];
+  filters: { field: string; label: string; operator: string; value: number; unit: string }[];
+  raw: string;
+}> {
+  if (!apiConfig.useMockData && !apiConfig.backendDown) {
+    return realApi.parseNLStrategy(text);
+  }
+  throw new Error('Mock 模式不支持NL策略解析');
 }

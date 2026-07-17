@@ -42,54 +42,156 @@ async function fetchTencentKline(code: string, days: number = 365): Promise<{
 }
 
 /**
- * 根据策略生成买卖信号
- * 基于简单的均线交叉和因子信号
+ * 根据策略配置生成买卖信号
+ * 支持均线交叉、价格突破、放量等条件
  */
 function generateSignals(
   klineData: { date: string; open: number; close: number; high: number; low: number; volume: number }[],
-  strategyId: string
+  signalConfig?: { buyConditions?: any[]; sellConditions?: any[] }
 ): ('buy' | 'sell' | 'hold')[] {
   const signals: ('buy' | 'sell' | 'hold')[] = [];
-  if (klineData.length < 20) {
+
+  // 默认参数：MA5/MA20 金叉买入，死叉卖出
+  const buyConds = signalConfig?.buyConditions || [{ type: 'ma_cross', params: { short: 5, long: 20 } }];
+  const sellConds = signalConfig?.sellConditions || [{ type: 'ma_cross', params: { short: 5, long: 20 } }];
+
+  const maxPeriod = Math.max(
+    ...buyConds.map((c: any) => c.params?.long || c.params?.period || 20),
+    ...sellConds.map((c: any) => c.params?.long || c.params?.period || 20),
+    20
+  );
+
+  if (klineData.length < maxPeriod + 1) {
     return klineData.map(() => 'hold');
   }
 
   const closes = klineData.map(d => d.close);
+  const volumes = klineData.map(d => d.volume);
+
+  // 计算均线辅助函数
+  const calcMA = (data: number[], period: number, idx: number): number => {
+    if (idx < period - 1) return 0;
+    let sum = 0;
+    for (let j = idx - period + 1; j <= idx; j++) sum += data[j] || 0;
+    return sum / period;
+  };
 
   for (let i = 0; i < klineData.length; i++) {
-    if (i < 20) {
+    if (i < maxPeriod) {
       signals.push('hold');
       continue;
     }
 
-    // 计算5日、20日均线
-    let ma5 = 0, ma20 = 0;
-    for (let j = i - 4; j <= i; j++) ma5 += closes[j] || 0;
-    ma5 /= 5;
-    for (let j = i - 19; j <= i; j++) ma20 += closes[j] || 0;
-    ma20 /= 20;
+    let buySignal = false;
+    let sellSignal = false;
 
-    const prevMa5 = (() => {
-      let sum = 0;
-      for (let j = i - 5; j <= i - 1; j++) sum += closes[j] || 0;
-      return sum / 5;
-    })();
-    const prevMa20 = (() => {
-      let sum = 0;
-      for (let j = i - 20; j <= i - 1; j++) sum += closes[j] || 0;
-      return sum / 20;
-    })();
+    // 评估买入条件
+    for (const cond of buyConds) {
+      switch (cond.type) {
+        case 'ma_cross': {
+          const short = cond.params.short || 5;
+          const long = cond.params.long || 20;
+          const curShort = calcMA(closes, short, i);
+          const curLong = calcMA(closes, long, i);
+          const prevShort = calcMA(closes, short, i - 1);
+          const prevLong = calcMA(closes, long, i - 1);
+          if (curShort > 0 && curLong > 0 && prevShort <= prevLong && curShort > curLong) {
+            buySignal = true;
+          }
+          break;
+        }
+        case 'ma_break': {
+          const period = cond.params.period || 20;
+          const ma = calcMA(closes, period, i);
+          const prevMa = calcMA(closes, period, i - 1);
+          if (ma > 0 && klineData[i - 1].close <= prevMa && klineData[i].close > ma) {
+            buySignal = true;
+          }
+          break;
+        }
+        case 'volume_breakout': {
+          // 当日成交量超过前5日均量的1.5倍
+          const avgVol5 = (() => {
+            let sum = 0;
+            for (let j = i - 4; j <= i; j++) sum += volumes[j] || 0;
+            return sum / 5;
+          })();
+          if (volumes[i] > avgVol5 * 1.5 && klineData[i].close > klineData[i].open) {
+            buySignal = true;
+          }
+          break;
+        }
+        case 'rsi': {
+          const threshold = cond.params.threshold || 30;
+          // 简化RSI计算 (14日)
+          const period = 14;
+          if (i >= period) {
+            let gain = 0, loss = 0;
+            for (let j = i - period + 1; j <= i; j++) {
+              const diff = closes[j] - closes[j - 1];
+              if (diff > 0) gain += diff;
+              else loss -= diff;
+            }
+            const rs = loss > 0 ? gain / loss : 100;
+            const rsi = 100 - (100 / (1 + rs));
+            if (rsi < threshold) buySignal = true;
+          }
+          break;
+        }
+        case 'macd': {
+          // 简化MACD计算
+          const ema12 = calcMA(closes, 12, i);
+          const ema26 = calcMA(closes, 26, i);
+          const prevEma12 = calcMA(closes, 12, i - 1);
+          const prevEma26 = calcMA(closes, 26, i - 1);
+          if (ema12 > 0 && ema26 > 0 && prevEma12 <= prevEma26 && ema12 > ema26) {
+            buySignal = true;
+          }
+          break;
+        }
+      }
+    }
 
-    // 黄金交叉: MA5上穿MA20 → 买入
-    if (prevMa5 <= prevMa20 && ma5 > ma20) {
-      signals.push('buy');
+    // 评估卖出条件
+    for (const cond of sellConds) {
+      switch (cond.type) {
+        case 'ma_cross': {
+          const short = cond.params.short || 5;
+          const long = cond.params.long || 20;
+          const curShort = calcMA(closes, short, i);
+          const curLong = calcMA(closes, long, i);
+          const prevShort = calcMA(closes, short, i - 1);
+          const prevLong = calcMA(closes, long, i - 1);
+          if (curShort > 0 && curLong > 0 && prevShort >= prevLong && curShort < curLong) {
+            sellSignal = true;
+          }
+          break;
+        }
+        case 'ma_break': {
+          const period = cond.params.period || 20;
+          const ma = calcMA(closes, period, i);
+          if (ma > 0 && klineData[i - 1].close >= ma && klineData[i].close < ma) {
+            sellSignal = true;
+          }
+          break;
+        }
+        case 'volume_breakout': {
+          const avgVol5 = (() => {
+            let sum = 0;
+            for (let j = i - 4; j <= i; j++) sum += volumes[j] || 0;
+            return sum / 5;
+          })();
+          if (volumes[i] > avgVol5 * 1.5 && klineData[i].close < klineData[i - 1].close) {
+            sellSignal = true;
+          }
+          break;
+        }
+      }
     }
-    // 死亡交叉: MA5下穿MA20 → 卖出
-    else if (prevMa5 >= prevMa20 && ma5 < ma20) {
-      signals.push('sell');
-    } else {
-      signals.push('hold');
-    }
+
+    if (buySignal) signals.push('buy');
+    else if (sellSignal) signals.push('sell');
+    else signals.push('hold');
   }
 
   return signals;
@@ -97,7 +199,7 @@ function generateSignals(
 
 router.post('/run', async (req, res, next) => {
   try {
-    const { stockCode, strategyId, startDate, endDate, initialCapital = 100000 } = req.body;
+    const { stockCode, strategyId, startDate, endDate, initialCapital = 100000, signalConfig } = req.body;
 
     // 1. 获取 K 线数据（取足够覆盖日期范围的天数）
     const start = new Date(startDate);
@@ -134,7 +236,7 @@ router.post('/run', async (req, res, next) => {
     const dataForBacktest = filteredData.length > 0 ? filteredData : klineData.slice(-250);
 
     // 3. 生成策略信号
-    const signals = generateSignals(klineData, strategyId);
+    const signals = generateSignals(klineData, signalConfig);
     // 对齐到回测日期范围
     const startIdx = klineData.findIndex(d => d.date >= startDate);
     const signalSlice = signals.slice(Math.max(0, startIdx), Math.max(0, startIdx) + dataForBacktest.length);

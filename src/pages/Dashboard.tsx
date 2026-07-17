@@ -145,7 +145,13 @@ const HotStockTable: React.FC<{
 );
 
 const Dashboard: React.FC = () => {
-  const { marketOverview, topGainers, topLosers, topVolume, loading, fetchInitialData, refreshMarketData } = useAppStore();
+  const marketOverview = useAppStore((s) => s.marketOverview);
+  const topGainers = useAppStore((s) => s.topGainers);
+  const topLosers = useAppStore((s) => s.topLosers);
+  const topVolume = useAppStore((s) => s.topVolume);
+  const loading = useAppStore((s) => s.loading);
+  const fetchInitialData = useAppStore((s) => s.fetchInitialData);
+  const refreshMarketData = useAppStore((s) => s.refreshMarketData);
 
   // 加载更多状态
   const [gainersOffset, setGainersOffset] = useState(0);

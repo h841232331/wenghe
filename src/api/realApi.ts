@@ -102,7 +102,7 @@ export const realApi = {
   },
 
   async fetchStrategies(): Promise<Strategy[]> {
-    return request<Strategy[]>('/strategy');
+    return request<Strategy[]>('/strategy/public');
   },
 
   async createStrategy(data: Partial<Strategy>): Promise<Strategy> {
@@ -175,5 +175,19 @@ export const realApi = {
       points: any[];
       depth: any;
     }>(`/stock/intraday/${code}`);
+  },
+
+  async parseNLStrategy(text: string): Promise<{
+    name: string;
+    description: string;
+    buyConditions: { type: string; params: Record<string, number>; desc: string }[];
+    sellConditions: { type: string; params: Record<string, number>; desc: string }[];
+    filters: { field: string; label: string; operator: string; value: number; unit: string }[];
+    raw: string;
+  }> {
+    return request<any>('/nl-strategy/parse', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
   },
 };

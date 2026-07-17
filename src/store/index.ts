@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { Stock, StockQuote, Strategy, SelectionResult, BacktestResult, MarketOverview } from '../types';
 import {
   fetchMarketOverview,
@@ -67,19 +66,36 @@ interface AppState {
   fetchInitialData: () => void;
 }
 
+// localStorage 持久化辅助
+const STORAGE_KEY = 'wenghe-quant-storage';
+const loadPersisted = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {};
+};
+const persist = (state: any) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      myStrategies: state.myStrategies,
+      selectedStocks: state.selectedStocks,
+    }));
+  } catch {}
+};
+
 // 创建状态管理store
-export const useAppStore = create<AppState>()(
-  persist(
-    (set, get) => ({
-      // 初始状态 - 全部为空，由API填充
+const persisted = loadPersisted();
+export const useAppStore = create<AppState>()((set, get) => ({
+      // 初始状态 - 从 localStorage 恢复
       stocks: [],
       quotes: [],
       selectedStock: null,
-      selectedStocks: [],
+      selectedStocks: persisted.selectedStocks || [],
 
       strategies: [],
       selectedStrategy: null,
-      myStrategies: [],
+      myStrategies: persisted.myStrategies || [],
 
       selectionResults: [],
       currentSelectionResult: null,
@@ -100,34 +116,45 @@ export const useAppStore = create<AppState>()(
       // 股票选择相关Actions
       setSelectedStock: (stock) => set({ selectedStock: stock }),
 
-      addSelectedStock: (stock) => set((state) => ({
-        selectedStocks: state.selectedStocks.find(s => s.code === stock.code)
-          ? state.selectedStocks
-          : [...state.selectedStocks, stock]
-      })),
+      addSelectedStock: (stock) => set((state) => {
+        const newState = state.selectedStocks.find(s => s.code === stock.code)
+          ? { selectedStocks: state.selectedStocks }
+          : { selectedStocks: [...state.selectedStocks, stock] };
+        persist({ ...state, ...newState });
+        return newState;
+      }),
 
-      removeSelectedStock: (stockCode) => set((state) => ({
-        selectedStocks: state.selectedStocks.filter(s => s.code !== stockCode)
-      })),
+      removeSelectedStock: (stockCode) => set((state) => {
+        const newState = { selectedStocks: state.selectedStocks.filter(s => s.code !== stockCode) };
+        persist({ ...state, ...newState });
+        return newState;
+      }),
 
-      clearSelectedStocks: () => set({ selectedStocks: [] }),
+      clearSelectedStocks: () => set((state) => {
+        persist({ ...state, selectedStocks: [] });
+        return { selectedStocks: [] };
+      }),
 
       // 策略相关Actions
       setSelectedStrategy: (strategy) => set({ selectedStrategy: strategy }),
 
-      addMyStrategy: (strategy) => set((state) => ({
-        myStrategies: [...state.myStrategies, strategy]
-      })),
+      addMyStrategy: (strategy) => set((state) => {
+        const newState = { myStrategies: [...state.myStrategies, strategy] };
+        persist({ ...state, ...newState });
+        return newState;
+      }),
 
-      updateMyStrategy: (strategy) => set((state) => ({
-        myStrategies: state.myStrategies.map(s =>
-          s.id === strategy.id ? strategy : s
-        )
-      })),
+      updateMyStrategy: (strategy) => set((state) => {
+        const newState = { myStrategies: state.myStrategies.map(s => s.id === strategy.id ? strategy : s) };
+        persist({ ...state, ...newState });
+        return newState;
+      }),
 
-      deleteMyStrategy: (strategyId) => set((state) => ({
-        myStrategies: state.myStrategies.filter(s => s.id !== strategyId)
-      })),
+      deleteMyStrategy: (strategyId) => set((state) => {
+        const newState = { myStrategies: state.myStrategies.filter(s => s.id !== strategyId) };
+        persist({ ...state, ...newState });
+        return newState;
+      }),
 
       // 选股相关Actions - 调用真实API
       runSelection: (strategyId, filters) => {
@@ -213,13 +240,5 @@ export const useAppStore = create<AppState>()(
           set({ loading: false });
         }
       },
-    }),
-    {
-      name: 'wenghe-quant-storage',
-      partialize: (state) => ({
-        myStrategies: state.myStrategies,
-        selectedStocks: state.selectedStocks,
-      }),
-    }
-  )
+    })
 );

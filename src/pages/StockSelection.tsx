@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactECharts from 'echarts-for-react';
 import { Target, Play, Download, BarChart3, PieChart, Info, ChevronDown, X, Plus, TrendingUp, DollarSign, LineChart, BarChart, Filter } from 'lucide-react';
@@ -7,16 +7,18 @@ import { Strategy as StrategyType, StrategyFilter } from '@/types';
 import { getFilterFields, getFactorLibrary, runStockSelection } from '@/api';
 
 // 策略类型标签配置
-const typeConfig = {
+const typeConfig: Record<string, { label: string; color: string }> = {
   factor: { label: '多因子', color: 'bg-blue-100 text-blue-700 border-blue-200' },
   technical: { label: '技术指标', color: 'bg-purple-100 text-purple-700 border-purple-200' },
   fundamental: { label: '基本面', color: 'bg-green-100 text-green-700 border-green-200' },
   mixed: { label: '混合策略', color: 'bg-amber-100 text-amber-700 border-amber-200' },
+  custom: { label: 'NL解析', color: 'bg-rose-100 text-rose-700 border-rose-200' },
+  preset: { label: '系统预设', color: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
 
 // 策略卡片组件
 const StrategyCard: React.FC<{
-  strategy: StrategyType;
+  strategy: StrategyType & { _source?: 'mine' | 'public' };
   isSelected: boolean;
   onClick: () => void;
   onShowFactorLibrary?: () => void;
@@ -31,11 +33,22 @@ const StrategyCard: React.FC<{
       }`}
     >
       <div className="flex items-start justify-between mb-3">
-        <h3 className="text-lg font-semibold text-slate-800 group-hover:text-amber-600 transition-colors">
-          {strategy.name}
-        </h3>
-        <span className={`px-2 py-1 rounded-md text-xs font-medium border ${typeConfig[strategy.type].color}`}>
-          {typeConfig[strategy.type].label}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <h3 className="text-lg font-semibold text-slate-800 group-hover:text-amber-600 transition-colors truncate">
+            {strategy.name}
+          </h3>
+          {'_source' in strategy && (
+            <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+              (strategy as any)._source === 'mine'
+                ? 'bg-rose-50 text-rose-600 border border-rose-200'
+                : 'bg-slate-100 text-slate-500 border border-slate-200'
+            }`}>
+              {(strategy as any)._source === 'mine' ? '我的' : '公开'}
+            </span>
+          )}
+        </div>
+        <span className={`shrink-0 px-2 py-1 rounded-md text-xs font-medium border ${(typeConfig[strategy.type] || typeConfig.custom).color}`}>
+          {(typeConfig[strategy.type] || typeConfig.custom).label}
         </span>
       </div>
       <p className="text-sm text-slate-600 mb-4 line-clamp-2 leading-relaxed">
@@ -332,13 +345,16 @@ const FilterPanel: React.FC<{
 
 // 选股结果表格组件
 const ResultTable: React.FC = () => {
-  const { currentSelectionResult, selectedStrategy, setSelectedStock, setSelectedStrategy: setBacktestStrategy } = useAppStore();
+  const currentSelectionResult = useAppStore((s) => s.currentSelectionResult);
+  const selectedStrategy = useAppStore((s) => s.selectedStrategy);
+  const setSelectedStock = useAppStore((s) => s.setSelectedStock);
+  const setSelectedStrategy = useAppStore((s) => s.setSelectedStrategy);
   const navigate = useNavigate();
 
   const handleAddToBacktest = (stock: any) => {
     setSelectedStock(stock);
     if (selectedStrategy) {
-      setBacktestStrategy(selectedStrategy);
+      setSelectedStrategy(selectedStrategy);
     }
     navigate('/backtest');
   };
@@ -475,14 +491,36 @@ const ResultTable: React.FC = () => {
 };
 
 const StockSelection: React.FC = () => {
-  const { strategies, selectedStrategy, setSelectedStrategy, setCurrentSelectionResult, loading, setLoading } = useAppStore();
+  const strategies = useAppStore((s) => s.strategies);
+  const myStrategies = useAppStore((s) => s.myStrategies);
+  const selectedStrategy = useAppStore((s) => s.selectedStrategy);
+  const setSelectedStrategy = useAppStore((s) => s.setSelectedStrategy);
+  const setCurrentSelectionResult = useAppStore((s) => s.setCurrentSelectionResult);
+  const loading = useAppStore((s) => s.loading);
+  const setLoading = useAppStore((s) => s.setLoading);
   const [selectedType, setSelectedType] = useState<string>('all');
+  const [selectedSource, setSelectedSource] = useState<string>('all');
   const [showFactorModal, setShowFactorModal] = useState(false);
   const [customFilters, setCustomFilters] = useState<StrategyFilter[]>([]);
 
-  const filteredStrategies = selectedType === 'all' 
-    ? strategies 
-    : strategies.filter(s => s.type === selectedType);
+  // 合并我的策略和公开策略，去重并标记来源
+  const allStrategies = useMemo(() => {
+    const myIds = new Set(myStrategies.map(s => s.id));
+    const publicOnly = strategies.filter(s => !myIds.has(s.id));
+    return [
+      ...myStrategies.map(s => ({ ...s, _source: 'mine' as const })),
+      ...publicOnly.map(s => ({ ...s, _source: 'public' as const })),
+    ];
+  }, [myStrategies, strategies]);
+
+  const filteredStrategies = useMemo(() => {
+    return allStrategies.filter(s => {
+      if (selectedSource === 'mine' && s._source !== 'mine') return false;
+      if (selectedSource === 'public' && s._source !== 'public') return false;
+      if (selectedType !== 'all' && s.type !== selectedType) return false;
+      return true;
+    });
+  }, [allStrategies, selectedSource, selectedType]);
 
   useEffect(() => {
     if (selectedStrategy) {
@@ -631,26 +669,27 @@ const StockSelection: React.FC = () => {
               因子库说明
             </button>
           </h2>
-          <div className="flex gap-2">
-            {[
-              { key: 'all', label: '全部' },
-              { key: 'factor', label: '多因子' },
-              { key: 'technical', label: '技术指标' },
-              { key: 'fundamental', label: '基本面' },
-              { key: 'mixed', label: '混合' },
-            ].map(type => (
-              <button
-                key={type.key}
-                onClick={() => setSelectedType(type.key)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  selectedType === type.key
-                    ? 'bg-amber-500 text-white shadow-md shadow-amber-500/25'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {type.label}
-              </button>
-            ))}
+          <div className="flex items-center gap-3">
+            {/* 来源筛选 */}
+            <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
+              {[
+                { key: 'all', label: '全部' },
+                { key: 'mine', label: '我的策略' },
+                { key: 'public', label: '公开参考' },
+              ].map(src => (
+                <button
+                  key={src.key}
+                  onClick={() => setSelectedSource(src.key)}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+                    selectedSource === src.key
+                      ? 'bg-white text-amber-600 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {src.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
