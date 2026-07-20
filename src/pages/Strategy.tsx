@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { Plus, Edit2, Trash2, Eye, Share2, Copy, Save, X, Info, HelpCircle, Wand2, Loader2 } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { Strategy as StrategyType, StrategyFactor, StrategyFilter } from '@/types';
@@ -104,12 +104,12 @@ const FactorLibraryModal: React.FC<{
   );
 };
 
-const StrategyDetailCard: React.FC<{
+const StrategyDetailCard = memo(({ strategy, onEdit, onDelete, onDuplicate }: {
   strategy: StrategyType;
   onEdit: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
-}> = ({ strategy, onEdit, onDelete, onDuplicate }) => {
+}) => {
   const [showFactorLibrary, setShowFactorLibrary] = useState(false);
 
   return (
@@ -223,9 +223,9 @@ const StrategyDetailCard: React.FC<{
       <FactorLibraryModal isOpen={showFactorLibrary} onClose={() => setShowFactorLibrary(false)} />
     </div>
   );
-};
+});
 
-// 可搜索下拉选择组件
+// 策略编辑器组件可搜索下拉选择组件
 const SearchableSelect: React.FC<{
   options: { key: string; label: string }[];
   value: string;
@@ -778,15 +778,15 @@ const Strategy: React.FC = () => {
   }, [addMyStrategy]);
 
   const handleDelete = useCallback(async (strategyId: string) => {
-    // 检查策略是否存在
-    const exists = myStrategies.some(s => s.id === strategyId);
+    // 检查策略是否存在（使用 getState 避免依赖 myStrategies 导致循环重渲染）
+    const exists = useAppStore.getState().myStrategies.some(s => s.id === strategyId);
     if (!exists) return;
     if (window.confirm('确定要删除这个策略吗？')) {
       deleteMyStrategy(strategyId);
       // 同步到服务端
       try { await deleteStrategy(strategyId); } catch {}
     }
-  }, [myStrategies, deleteMyStrategy]);
+  }, [deleteMyStrategy]);
 
   const handleSave = async (strategy: StrategyType) => {
     if (editingStrategy) {
